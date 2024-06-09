@@ -20,8 +20,8 @@ class StratumProxy:
         self.pool_host = self.pool_address.split('//')[1].split(':')[0]
         self.pool_port = int(self.pool_address.split(':')[2])
         self.pool_sock = None
-        self.db_handler = DatabaseHandler(config.get('DATABASE', 'db_file'))
-        self.stratum_processing = StratumProcessing(config, self.db_handler)
+        self.db_handler = DatabaseHandler(config.get('DATABASE', 'db_file')).create_table()
+        self.stratum_processing = StratumProcessing(config)
 
     def start(self):
         if self.connect_to_pool():
@@ -143,9 +143,10 @@ class StratumProxy:
 
 
 class StratumProcessing:
-    def __init__(self, config, db_handler):
+    def __init__(self, config):
         self.config = config
-        self.db_handler = db_handler
+        self.db_file = config.get('DATABASE', 'db_file')
+        self.db_handler = DatabaseHandler(self.db_file)
         self.block_template_fetcher = BlockTemplate(config)
         self.block_template = None
         self.merkle_counts_file = config.get('FILES', 'merkle_file')
@@ -677,9 +678,6 @@ def main():
 
     config = configparser.ConfigParser()
     config.read('config.ini')
-
-    db_handler = DatabaseHandler(config.get('DATABASE', 'db_file'))
-    db_handler.create_table()
 
     pool_address = f"stratum+tcp://{config['POOL']['host']}:{config['POOL']['port']}"
     miner_port = int(config['STRATUM']['port'])
