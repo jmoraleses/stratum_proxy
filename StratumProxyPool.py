@@ -337,15 +337,15 @@ class StratumProcessing:
         job = self.jobs.get(job_id)
         print("job id: {}", job['job_id'])
 
-        if job is None:
-            response = {
-                "id": None,
-                "result": False,
-                "error": "Job not found"
-            }
-            miner_sock.sendall(json.dumps(response).encode('utf-8'))
-            print(f'Respuesta enviada al minero: {json.dumps(response, indent=4)}')
-            return
+        # if job is None:
+        #     response = {
+        #         "id": None,
+        #         "result": False,
+        #         "error": "Job not found"
+        #     }
+        #     miner_sock.sendall(json.dumps(response).encode('utf-8'))
+        #     print(f'Respuesta enviada al minero: {json.dumps(response, indent=4)}')
+        #     return
 
         block_header = self.create_block_header_submit(job['version'], job['prevhash'], job['merkle_branch'],
                                                        self.to_little_endian(ntime),
