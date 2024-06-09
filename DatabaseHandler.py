@@ -4,7 +4,6 @@ class DatabaseHandler:
     def __init__(self, db_file):
         self.connection = sqlite3.connect(db_file)
         self.cursor = self.connection.cursor()
-        self.create_table()
 
     def create_table(self):
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS merkle_roots (

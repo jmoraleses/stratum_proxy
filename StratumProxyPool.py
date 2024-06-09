@@ -23,7 +23,6 @@ class StratumProxy:
         self.db_handler = DatabaseHandler(config.get('DATABASE', 'db_file'))
         self.stratum_processing = StratumProcessing(config, self.db_handler)
 
-
     def start(self):
         if self.connect_to_pool():
             threading.Thread(target=self.block_template_updater).start()
@@ -266,7 +265,7 @@ class StratumProcessing:
                 job['coinbase2']
             )
             _merkle_branch = job['merkle_branch']
-            pool_header = self.create_pool_header(version, prevhash, merkle_branch, ntime, nbits, coinbase1, coinbase2)
+            # pool_header = self.create_pool_header(version, prevhash, merkle_branch, ntime, nbits, coinbase1, coinbase2)
             # print(f"Verificando job {job_id}...")
             # print(f"Header pool: {pool_header}")
 
@@ -675,8 +674,12 @@ def swap_endianness_8chars_final(hex_string):
 
 
 def main():
+
     config = configparser.ConfigParser()
     config.read('config.ini')
+
+    db_handler = DatabaseHandler(config.get('DATABASE', 'db_file'))
+    db_handler.create_table()
 
     pool_address = f"stratum+tcp://{config['POOL']['host']}:{config['POOL']['port']}"
     miner_port = int(config['STRATUM']['port'])
