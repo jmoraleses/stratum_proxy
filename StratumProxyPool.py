@@ -110,31 +110,25 @@ class StratumProxy:
                 buffer = buffer[end_idx:]
                 message_json = json.loads(message)
 
-                if source == 'miner':
-                    # Procesar la respuesta de submit del minero
-                    if message_json.get("method") == "mining.submit":
-                        self.stratum_processing.process_submit(message_json["params"], dest_sock)
-
-                    else:
-                        dest_sock.sendall(message.encode('utf-8') + b'\n')
-                        print(f"Raw message miner: {message}")
-
-                if source == 'pool':
-                    # Comprobar y crear trabajo con StratumProcessing
-                    if message_json.get("method") == "mining.notify":
-                        self.stratum_processing.verify_job(message_json["params"], dest_sock)
-
-                    # Manejar cambios de dificultad desde la pool
-                    # elif message_json.get("method") == "mining.set_difficulty":
-                    #     self.stratum_processing.set_difficulty(message_json["params"], dest_sock)
+                # Procesar la respuesta de submit del minero
+                if message_json.get("method") == "mining.submit":
+                    self.stratum_processing.process_submit(message_json["params"], dest_sock)
 
                     # Manejar la autorización del minero
-                    elif message_json.get("method") == "mining.authorize":
-                        self.stratum_processing.authorize_miner(message_json["params"], dest_sock)
+                # elif message_json.get("method") == "mining.authorize":
+                #     self.stratum_processing.authorize_miner(message_json["params"], dest_sock)
 
-                    else:
-                        dest_sock.sendall(message.encode('utf-8') + b'\n')
-                        print(f"Raw message pool: {message}")
+                # Comprobar y crear trabajo con StratumProcessing
+                elif message_json.get("method") == "mining.notify":
+                    self.stratum_processing.verify_job(message_json["params"], dest_sock)
+
+                # Manejar cambios de dificultad desde la pool
+                # elif message_json.get("method") == "mining.set_difficulty":
+                #     self.stratum_processing.set_difficulty(message_json["params"], dest_sock)
+
+                else:
+                    dest_sock.sendall(message.encode('utf-8') + b'\n')
+                    print(f"Raw message pool: {message}")
 
             return buffer
         except Exception as e:
