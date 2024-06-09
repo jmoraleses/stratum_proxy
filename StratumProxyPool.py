@@ -10,6 +10,7 @@ import time
 import pandas as pd
 import requests
 from BlockTemplate import BlockTemplate
+from DatabaseHandler import DatabaseHandler
 
 
 class StratumProxy:
@@ -67,7 +68,7 @@ class StratumProxy:
                 ready_socks, _, _ = select.select([miner_sock, pool_sock], [], [])
                 for sock in ready_socks:
                     if sock == miner_sock:
-                        miner_buffer = self.proxy_message(miner_sock, pool_sock, miner_buffer, "minero")
+                        miner_buffer = self.proxy_message(miner_sock, pool_sock, miner_buffer, "miner")
                         if miner_buffer is None:
                             return
                     elif sock == pool_sock:
@@ -102,25 +103,32 @@ class StratumProxy:
                 buffer = buffer[end_idx:]
                 message_json = json.loads(message)
 
-                # Comprobar y crear trabajo con StratumProcessing
-                if message_json.get("method") == "mining.notify":
-                    self.stratum_processing.verify_job(message_json["params"], dest_sock)
+                if source == 'miner':
+                    # Procesar la respuesta de submit del minero
+                    if message_json.get("method") == "mining.submit":
+                        self.stratum_processing.process_submit(message_json["params"], dest_sock)
 
-                # Procesar la respuesta de submit del minero
-                elif message_json.get("method") == "mining.submit":
-                    self.stratum_processing.process_submit(message_json["params"], dest_sock)
+                    else:
+                        dest_sock.sendall(message.encode('utf-8') + b'\n')
+                        print(f"Raw message miner: {message}")
 
-                # Manejar cambios de dificultad desde la pool
-                elif message_json.get("method") == "mining.set_difficulty":
-                    self.stratum_processing.set_difficulty(message_json["params"], dest_sock)
+                if source == 'pool':
+                    # Comprobar y crear trabajo con StratumProcessing
+                    if message_json.get("method") == "mining.notify":
+                        self.stratum_processing.verify_job(message_json["params"], dest_sock)
 
-                # Manejar la autorización del minero
-                elif message_json.get("method") == "mining.authorize":
-                    self.stratum_processing.authorize_miner(message_json["params"], dest_sock)
+                    # Manejar cambios de dificultad desde la pool
+                    elif message_json.get("method") == "mining.set_difficulty":
+                        self.stratum_processing.set_difficulty(message_json["params"], dest_sock)
 
-                else:
-                    dest_sock.sendall(message.encode('utf-8') + b'\n')
-                    print(f"Raw message proxy: {message}")
+                    # Manejar la autorización del minero
+                    elif message_json.get("method") == "mining.authorize":
+                        self.stratum_processing.authorize_miner(message_json["params"], dest_sock)
+
+                    else:
+                        dest_sock.sendall(message.encode('utf-8') + b'\n')
+                        print(f"Raw message pool: {message}")
+
             return buffer
         except Exception as e:
             print(f"Error en proxy_message: {e}")
@@ -132,6 +140,7 @@ class StratumProcessing:
         self.config = config
         self.block_template_fetcher = BlockTemplate(config)
         self.block_template = None
+        self.db_handler = DatabaseHandler(config.get('DATABASE', 'db_file'))
         self.merkle_counts_file = config.get('FILES', 'merkle_file')
         self.merkle_counts = self.load_merkle_counts(self.merkle_counts_file)
         self.coinbase_message = None
@@ -251,7 +260,8 @@ class StratumProcessing:
         print(f"Header pool: {pool_header}")
 
         # Comprobar si la raíz Merkle está en la lista y enviar los nonces correspondientes
-        if _merkle_root and self.check_merkle_root(_merkle_root):
+        if (_merkle_root and self.check_merkle_root(_merkle_root)) and not self.db_handler.merkle_root_exists(_merkle_root):
+            self.db_handler.insert_merkle_root(_merkle_root)
             self.jobs[job_id] = {
                 "job_id": job_id,
                 "prevhash": _prevhash,
