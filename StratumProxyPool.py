@@ -255,44 +255,44 @@ class StratumProcessing:
 
             # Utilizar los datos recopilados y calculados desde el blocktemplate
             job = self.create_job_from_blocktemplate()
+            if job is not None:
+                local_header, _version, _prevhash, _merkle_root, _nbits, _ntime, _nonce, _coinbase1, _coinbase2 = self.create_block_header(
+                    job['version'],
+                    job['prevhash'],
+                    job['merkle_branch'],
+                    job['ntime'],
+                    job['nbits'],
+                    job['coinbase1'],
+                    job['coinbase2']
+                )
+                _merkle_branch = job['merkle_branch']
+                # pool_header = self.create_pool_header(version, prevhash, merkle_branch, ntime, nbits, coinbase1, coinbase2)
+                # print(f"Verificando job {job_id}...")
+                # print(f"Header pool: {pool_header}")
 
-            local_header, _version, _prevhash, _merkle_root, _nbits, _ntime, _nonce, _coinbase1, _coinbase2 = self.create_block_header(
-                job['version'],
-                job['prevhash'],
-                job['merkle_branch'],
-                job['ntime'],
-                job['nbits'],
-                job['coinbase1'],
-                job['coinbase2']
-            )
-            _merkle_branch = job['merkle_branch']
-            # pool_header = self.create_pool_header(version, prevhash, merkle_branch, ntime, nbits, coinbase1, coinbase2)
-            # print(f"Verificando job {job_id}...")
-            # print(f"Header pool: {pool_header}")
+                # Comprobar si la raíz Merkle está en la lista y enviar los nonces correspondientes
+                if _merkle_root and self.check_merkle_root(_merkle_root):
+                    # self.db_handler.insert_merkle_root(_merkle_root)
+                    self.jobs[job_id] = {
+                        "job_id": job_id,
+                        "prevhash": _prevhash,
+                        "coinbase1": _coinbase1,
+                        "coinbase2": _coinbase2,
+                        "merkle_root": _merkle_root,
+                        "merkle_branch": _merkle_branch,
+                        "version": _version,
+                        "nbits": _nbits,
+                        "local_header": local_header
+                    }
 
-            # Comprobar si la raíz Merkle está en la lista y enviar los nonces correspondientes
-            if (_merkle_root and self.check_merkle_root(_merkle_root)) and not self.db_handler.merkle_root_exists(_merkle_root):
-                self.db_handler.insert_merkle_root(_merkle_root)
-                self.jobs[job_id] = {
-                    "job_id": job_id,
-                    "prevhash": _prevhash,
-                    "coinbase1": _coinbase1,
-                    "coinbase2": _coinbase2,
-                    "merkle_root": _merkle_root,
-                    "merkle_branch": _merkle_branch,
-                    "version": _version,
-                    "nbits": _nbits,
-                    "local_header": local_header
-                }
-
-                local_notify = {
-                    "id": None,
-                    "method": "mining.notify",
-                    "params": [job_id, _prevhash, _coinbase1, _coinbase2, _merkle_branch, _version, _nbits, _ntime,
-                               clean_jobs]
-                }
-                miner_sock.sendall(json.dumps(local_notify).encode('utf-8') + b'\n')
-                print("Header local: {}", local_notify)
+                    local_notify = {
+                        "id": None,
+                        "method": "mining.notify",
+                        "params": [job_id, _prevhash, _coinbase1, _coinbase2, _merkle_branch, _version, _nbits, _ntime,
+                                   clean_jobs]
+                    }
+                    miner_sock.sendall(json.dumps(local_notify).encode('utf-8') + b'\n')
+                    # print("Header local: {}", local_notify)
 
             # Obtener los datos del RPC simulados
             self.update_block_template()
