@@ -67,7 +67,7 @@ Stratum Proxy is a cryptocurrency mining proxy that connects miners to a mining 
 
 To start the proxy, run:
 ```sh
-python3 stratum_proxy.py
+python3 StratumProxyPool.py
 ```
 
 
