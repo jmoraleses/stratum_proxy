@@ -125,8 +125,8 @@ class StratumProxy:
                         self.stratum_processing.verify_job(message_json["params"], dest_sock)
 
                     # Manejar cambios de dificultad desde la pool
-                    elif message_json.get("method") == "mining.set_difficulty":
-                        self.stratum_processing.set_difficulty(message_json["params"], dest_sock)
+                    # elif message_json.get("method") == "mining.set_difficulty":
+                    #     self.stratum_processing.set_difficulty(message_json["params"], dest_sock)
 
                     # Manejar la autorización del minero
                     elif message_json.get("method") == "mining.authorize":
@@ -156,7 +156,6 @@ class StratumProcessing:
         self.address = config.get('ADDRESS', 'address')
         self.version = None
         self.height = None
-        self.height_now = None
         self.prevhash = None
         self.nbits = None
         self.fee = None
@@ -184,14 +183,15 @@ class StratumProcessing:
 
     def update_block_template(self):
         template = self.block_template_fetcher.get_template()
-        if self.height != template['height']:
-            self.block_template = template
-            self.nbits = self.block_template['bits']
-            self.version = self.block_template['version']
-            self.prevhash = self.block_template['previousblockhash']
-            self.fee = self.calculate_coinbase_value()
-            self.transactions_raw = self.block_template['transactions']
-            self.height_now = self.block_template['height']
+        # if self.height_now != template['height']:
+        self.block_template = template
+        self.nbits = self.block_template['bits']
+        self.version = self.block_template['version']
+        self.prevhash = self.block_template['previousblockhash']
+        self.fee = self.calculate_coinbase_value()
+        self.transactions_raw = self.block_template['transactions']
+        self.height = self.block_template['height']
+        # self.height_now = self.height
 
     def create_job_from_blocktemplate(self):
         try:
@@ -248,54 +248,52 @@ class StratumProcessing:
         ntime = job_params[7]
         clean_jobs = job_params[8]
 
+        # Obtener los datos del RPC simulados
         self.update_block_template()
-        self.height = self.height_now
 
-        while self.height == self.height_now:
+        # Utilizar los datos recopilados y calculados desde el blocktemplate
+        job = self.create_job_from_blocktemplate()
+        if job is not None:
+            local_header, _version, _prevhash, _merkle_root, _nbits, _ntime, _nonce, _coinbase1, _coinbase2 = self.create_block_header(
+                job['version'],
+                job['prevhash'],
+                job['merkle_branch'],
+                job['ntime'],
+                job['nbits'],
+                job['coinbase1'],
+                job['coinbase2']
+            )
+            _merkle_branch = job['merkle_branch']
+            # pool_header = self.create_pool_header(version, prevhash, merkle_branch, ntime, nbits, coinbase1, coinbase2)
+            print(f"Verificando job {job_id}...")
+            # print(f"Header pool: {pool_header}")
 
-            # Utilizar los datos recopilados y calculados desde el blocktemplate
-            job = self.create_job_from_blocktemplate()
-            if job is not None:
-                local_header, _version, _prevhash, _merkle_root, _nbits, _ntime, _nonce, _coinbase1, _coinbase2 = self.create_block_header(
-                    job['version'],
-                    job['prevhash'],
-                    job['merkle_branch'],
-                    job['ntime'],
-                    job['nbits'],
-                    job['coinbase1'],
-                    job['coinbase2']
-                )
-                _merkle_branch = job['merkle_branch']
-                # pool_header = self.create_pool_header(version, prevhash, merkle_branch, ntime, nbits, coinbase1, coinbase2)
-                # print(f"Verificando job {job_id}...")
-                # print(f"Header pool: {pool_header}")
+            # Comprobar si la raíz Merkle está en la lista y enviar los nonces correspondientes
+            if _merkle_root and self.check_merkle_root(_merkle_root):
+                # self.db_handler.insert_merkle_root(_merkle_root)
+                self.jobs[job_id] = {
+                    "job_id": job_id,
+                    "prevhash": _prevhash,
+                    "coinbase1": _coinbase1,
+                    "coinbase2": _coinbase2,
+                    "merkle_root": _merkle_root,
+                    "merkle_branch": _merkle_branch,
+                    "version": _version,
+                    "nbits": _nbits,
+                    "local_header": local_header
+                }
 
-                # Comprobar si la raíz Merkle está en la lista y enviar los nonces correspondientes
-                if _merkle_root and self.check_merkle_root(_merkle_root):
-                    # self.db_handler.insert_merkle_root(_merkle_root)
-                    self.jobs[job_id] = {
-                        "job_id": job_id,
-                        "prevhash": _prevhash,
-                        "coinbase1": _coinbase1,
-                        "coinbase2": _coinbase2,
-                        "merkle_root": _merkle_root,
-                        "merkle_branch": _merkle_branch,
-                        "version": _version,
-                        "nbits": _nbits,
-                        "local_header": local_header
-                    }
+                local_notify = {
+                    "id": None,
+                    "method": "mining.notify",
+                    "params": [job_id, _prevhash, _coinbase1, _coinbase2, _merkle_branch, _version, _nbits, _ntime,
+                               clean_jobs]
+                }
+                miner_sock.sendall(json.dumps(local_notify).encode('utf-8') + b'\n')
+                print("Trabajo enviado: {}", job_id)
+                # print("Header local: {}", local_notify)
 
-                    local_notify = {
-                        "id": None,
-                        "method": "mining.notify",
-                        "params": [job_id, _prevhash, _coinbase1, _coinbase2, _merkle_branch, _version, _nbits, _ntime,
-                                   clean_jobs]
-                    }
-                    miner_sock.sendall(json.dumps(local_notify).encode('utf-8') + b'\n')
-                    # print("Header local: {}", local_notify)
 
-            # Obtener los datos del RPC simulados
-            self.update_block_template()
 
 
     def verify_local_job(self, miner_sock):
@@ -436,8 +434,8 @@ class StratumProcessing:
         print(f"Minero {username} autorizado")
 
         # Establecer una dificultad inicial para el minero
-        self.set_difficulty([0], miner_sock)
-        print(f"Dificultad inicial para el minero {username} establecida a {self.min_difficulty}.")
+        # self.set_difficulty([0], miner_sock)
+        # print(f"Dificultad inicial para el minero {username} establecida a {self.min_difficulty}.")
 
     def create_pool_header(self, version, prev_block, merkle_branch, ntime, nbits, coinbase1, coinbase2):
         version = struct.pack("<L", int(version, 16)).hex()
