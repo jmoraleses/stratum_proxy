@@ -20,7 +20,9 @@ class StratumProxy:
         self.pool_host = self.pool_address.split('//')[1].split(':')[0]
         self.pool_port = int(self.pool_address.split(':')[2])
         self.pool_sock = None
-        self.stratum_processing = StratumProcessing(config)
+        self.db_handler = DatabaseHandler(config.get('DATABASE', 'db_file'))
+        self.stratum_processing = StratumProcessing(config, self.db_handler)
+
 
     def start(self):
         if self.connect_to_pool():
@@ -142,11 +144,11 @@ class StratumProxy:
 
 
 class StratumProcessing:
-    def __init__(self, config):
+    def __init__(self, config, db_handler):
         self.config = config
+        self.db_handler = db_handler
         self.block_template_fetcher = BlockTemplate(config)
         self.block_template = None
-        self.db_handler = DatabaseHandler(config.get('DATABASE', 'db_file'))
         self.merkle_counts_file = config.get('FILES', 'merkle_file')
         self.merkle_counts = self.load_merkle_counts(self.merkle_counts_file)
         self.coinbase_message = None
