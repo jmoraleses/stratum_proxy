@@ -9,6 +9,7 @@ Stratum Proxy is a cryptocurrency mining proxy that connects miners to a mining 
 - Authorizes miners.
 - Processes and verifies mining jobs.
 - Handles transactions and creates coinbases.
+- Sends the block header, if found, via bitcoin core.
 
 ## Requirements
 
