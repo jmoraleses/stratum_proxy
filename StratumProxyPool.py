@@ -267,7 +267,7 @@ class StratumProcessing:
             )
             _merkle_branch = job['merkle_branch']
             pool_header = self.create_pool_header(version, prevhash, merkle_branch, ntime, nbits, coinbase1, coinbase2)
-            print(f"Verificando job {job_id}...")
+            # print(f"Verificando job {job_id}...")
             # print(f"Header pool: {pool_header}")
 
             # Comprobar si la raíz Merkle está en la lista y enviar los nonces correspondientes
