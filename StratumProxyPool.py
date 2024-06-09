@@ -288,6 +288,8 @@ class StratumProcessing:
                            clean_jobs]
             }
             miner_sock.sendall(json.dumps(local_notify).encode('utf-8') + b'\n')
+            print("Header local: {}", local_notify)
+
 
     def verify_local_job(self, miner_sock):
         job_id = None
