@@ -24,7 +24,13 @@ class StratumProxy:
 
     def start(self):
         if self.connect_to_pool():
+            threading.Thread(target=self.block_template_updater).start()
             self.wait_for_miners()
+
+    def block_template_updater(self):
+        while True:
+            self.stratum_processing.block_template_fetcher.fetch_template()
+            time.sleep(2)
 
     def connect_to_pool(self):
         try:
@@ -174,9 +180,10 @@ class StratumProcessing:
         return self.merkle_counts['merkle_root'].apply(lambda root: merkle_root.startswith(root)).any()
 
     def update_block_template(self):
-        self.block_template = self.block_template_fetcher.fetch_template()
-        if self.block_template:
-            self.block_template['height'] += 1  # Incrementar el height
+        template = self.block_template_fetcher.get_template()
+        if self.height != template['height']:
+            self.block_template = template
+            self.height = self.block_template['height']
             self.nbits = self.block_template['bits']
             self.height = self.block_template['height']
             self.version = self.block_template['version']

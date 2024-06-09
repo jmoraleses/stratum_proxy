@@ -37,6 +37,10 @@ class BlockTemplate:
             self.template = None
             return None
 
+    def get_template(self):
+        return self.template
+
+
     def submit_block(self, block):
         payload = json.dumps({
             "jsonrpc": "1.0",
