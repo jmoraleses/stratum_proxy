@@ -13,6 +13,7 @@ else
     exit 1
 fi
 
+HOME="/home/ubuntu"
 DATA_DIR="$HOME/.bitcoin"
 CONFIG_FILE="$DATA_DIR/bitcoin.conf"
 BOOTSTRAP_BASE_URL="https://github.com/Blockchains-Download/Bitcoin/releases/download/2024.05.01/Bitcoin-Blockchain-2024-05-01.7z."
