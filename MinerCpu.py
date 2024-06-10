@@ -276,7 +276,7 @@ class StratumProcessing:
 
     def calculate_coinbase_value(self):
         base_reward = self.block_template['coinbasevalue']
-        total_fees = sum(tx['fee'] for tx in self.block_template['transactions'])
+        total_fees = sum(tx['fee'] for tx in self.transactions)
         coinbase_value = base_reward + total_fees
         self.fee = coinbase_value
         return self.fee
