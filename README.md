@@ -3,13 +3,13 @@
 Stratum Proxy is a cryptocurrency mining proxy that connects miners to a mining pool, managing difficulty and miner authorizations.
 
 ## StratumProxyZMQ
-`StratumProxyZMQ` is a mining proxy that uses the ZeroMQ protocol to subscribe to and receive messages. It manages communication between miners and the mining server, facilitating efficient task distribution and result collection through a ZeroMQ-based message channel. This design enhances scalability and reduces latency in data transmission, making it ideal for high-demand mining environments.
+`StratumProxyZMQ` is a mining proxy similar to `StratumProxyPool`, but instead of using the ZMQ protocol, it connects to Bitcoin Core via RPC. It manages the communication between miners and the mining server, facilitating efficient task distribution and result collection through RPC connections. This design enhances scalability and reduces latency in data transmission, making it ideal for high-demand mining environments.
 
 ## StratumProxyPool
-`StratumProxyPool` is a mining proxy variant designed for integration with mining pools. Unlike `stratumproxyzmq`, which focuses on ZeroMQ message handling, `StratumProxyPool` aggregates multiple miner connections, manages job distribution, and collects shares from miners. It optimizes mining pool operations for better organization and efficiency.
+`StratumProxyPool` is a mining proxy designed for integration with mining pools. It connects to Bitcoin Core via RPC and aggregates multiple miner connections, managing job distribution, and collecting shares from miners. It optimizes mining pool operations for better organization and efficiency.
 
 ## ProxyCPU
-`ProxyCPU` is a mining proxy operating under CPU control. It manages connections and distributes mining tasks using CPU processing power. While less efficient than GPU or ASIC proxies, `ProxyCPU` is useful for testing, development, and environments where CPU usage is preferable or more accessible.
+`ProxyCPU` is a mining proxy that operates under CPU control and also connects to Bitcoin Core via RPC. Unlike other proxies, it does not utilize or expect connections from ASICs. This makes `ProxyCPU` suitable for testing, development, and environments where CPU usage is preferable or more accessible.
 
 
 ## Features
