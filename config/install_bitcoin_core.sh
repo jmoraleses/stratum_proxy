@@ -71,6 +71,7 @@ maxconnections=4
 # ZeroMQ
 zmqpubrawblock=tcp://*:3000
 zmqpubrawtx=tcp://*:3001
+prune=550
 EOF
 
 # Iniciar Bitcoin Core
