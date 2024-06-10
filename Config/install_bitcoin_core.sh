@@ -43,10 +43,21 @@ cat Bitcoin-Blockchain-2024-05-01.7z.* > Bitcoin-Blockchain-2024-05-01.7z
 # Configurar Bitcoin Core
 echo "Configurando Bitcoin Core en modo de recorte..."
 cat << EOF > $CONFIG_FILE
+rpcuser=userbit
+rpcpassword=passbit
+rpcallowip=127.0.0.1
+rpcallowip=192.168.1.0/24
+rpcallowip=172.16.0.0/12
 server=1
-rpcuser=tuusuario
-rpcpassword=tupassword
-prune=550
+daemon=1
+rpcbind=0.0.0.0
+# Incrementar el número máximo de conexiones RPC permitidas
+rpcthreads=16
+# Incrementar el número máximo de conexiones de clientes
+maxconnections=4
+# ZeroMQ
+zmqpubrawblock=tcp://*:3000
+zmqpubrawtx=tcp://*:3001
 EOF
 
 # Iniciar Bitcoin Core

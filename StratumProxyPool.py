@@ -108,27 +108,24 @@ class StratumProxy:
                 end_idx = buffer.index('}') + 1
                 message = buffer[:end_idx]
                 buffer = buffer[end_idx:]
-                message_json = json.loads(message)
+                try:
+                    message_json = json.loads(message)
+                except json.JSONDecodeError as e:
+                    print(f"Error decoding JSON: {e}")
+                    continue  # Saltar al siguiente mensaje si hay un error de decodificación
 
-                # Procesar la respuesta de submit del minero
-                if message_json.get("method") == "mining.submit":
-                    self.stratum_processing.process_submit(message_json["params"], dest_sock)
+                method = message_json.get("method")
+                if method == "mining.submit":
+                    self.stratum_processing.process_submit(message_json.get("params", []), dest_sock)
+                elif method == "mining.notify":
+                    self.stratum_processing.verify_job(message_json.get("params", []), dest_sock)
+                # elif method == "mining.authorize":
+                #     self.stratum_processing.authorize_miner(message_json.get("params", []), dest_sock)
+                # elif method == "mining.set_difficulty":
+                #     self.stratum_processing.set_difficulty(message_json.get("params", []), dest_sock)
 
-                    # Manejar la autorización del minero
-                # elif message_json.get("method") == "mining.authorize":
-                #     self.stratum_processing.authorize_miner(message_json["params"], dest_sock)
-
-                # Comprobar y crear trabajo con StratumProcessing
-                elif message_json.get("method") == "mining.notify":
-                    self.stratum_processing.verify_job(message_json["params"], dest_sock)
-
-                # Manejar cambios de dificultad desde la pool
-                # elif message_json.get("method") == "mining.set_difficulty":
-                #     self.stratum_processing.set_difficulty(message_json["params"], dest_sock)
-
-                else:
-                    dest_sock.sendall(message.encode('utf-8') + b'\n')
-                    print(f"Raw message pool: {message}")
+                dest_sock.sendall(message.encode('utf-8') + b'\n')
+                print(f"Raw message: {message}")
 
             return buffer
         except Exception as e:
@@ -209,8 +206,7 @@ class StratumProcessing:
             timestamp = int(time.time())
             nbits = self.block_template['bits']
             job_id = random.randint(0, 0xFFFFFFFF)
-            clean_jobs = self.first_job or (self.height != self.block_template[
-                'height'])  # Establecer clean_jobs como True la primera vez o si el height es diferente
+            clean_jobs = self.first_job or (self.height != self.block_template['height'])  # Establecer clean_jobs como True la primera vez o si el height es diferente
 
             job = {
                 'job_id': job_id,
@@ -224,7 +220,7 @@ class StratumProcessing:
                 'clean_jobs': clean_jobs,
             }
 
-            self.first_job = False  # Cambiar a False después del primer trabajo
+            # self.first_job = False  # Cambiar a False después del primer trabajo
 
             return job
         except Exception as e:
@@ -359,13 +355,13 @@ class StratumProcessing:
         target = int(self.bits_to_target(job['nbits']), 16)
         print("block hash: {}", block_hash)
 
-        if int(block_hash, 16) > target:
-            response = {
-                "id": None,
-                "result": False,
-                "error": "Low difficulty"
-            }
-        else:
+        if int(block_hash, 16) < target:
+        #     response = {
+        #         "id": None,
+        #         "result": False,
+        #         "error": "Low difficulty"
+        #     }
+        # else:
             # Conectar al servidor de Bitcoin Core por RPC y enviar el bloque
             rpc_user = self.config.get('RPC', 'user')
             rpc_password = self.config.get('RPC', 'password')
@@ -380,21 +376,21 @@ class StratumProcessing:
 
             response = requests.post(rpc_url, json=block_data).json()
 
-            if response.get('error'):
-                response = {
-                    "id": None,
-                    "result": False,
-                    "error": response['error']
-                }
-            else:
-                response = {
-                    "id": None,
-                    "result": True,
-                    "error": None
-                }
+            # if response.get('error'):
+            #     response = {
+            #         "id": None,
+            #         "result": False,
+            #         "error": response['error']
+            #     }
+            # else:
+            #     response = {
+            #         "id": None,
+            #         "result": True,
+            #         "error": None
+            #     }
 
-        miner_sock.sendall(json.dumps(response).encode('utf-8'))
-        print(f'Respuesta enviada al minero: {json.dumps(response, indent=4)}')
+        # miner_sock.sendall(json.dumps(response).encode('utf-8'))
+        # print(f'Respuesta enviada al minero: {json.dumps(response, indent=4)}')
 
     def set_difficulty(self, params, miner_sock):
         try:
