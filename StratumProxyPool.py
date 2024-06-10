@@ -179,7 +179,6 @@ class StratumProcessing:
         self.nbits = self.block_template['bits']
         self.version = self.block_template['version']
         self.prevhash = self.block_template['previousblockhash']
-        self.fee = self.calculate_coinbase_value()
         self.transactions_raw = self.block_template['transactions']
         self.height = self.block_template['height']
         # self.height_now = self.height
@@ -190,10 +189,14 @@ class StratumProcessing:
             prev_block = self.block_template['previousblockhash']
             extranonce_placeholder = "00000000"
             miner_message = self.miner_message()
+
+            self.transactions = self.select_random_transactions()
+            self.fee = self.calculate_coinbase_value()
+
             coinbase1, coinbase2 = self.tx_make_coinbase_stratum(miner_message, extranonce_placeholder)
             coinbase_tx = coinbase1 + coinbase2
             coinbase_tx_hash = hashlib.sha256(hashlib.sha256(bytes.fromhex(coinbase_tx)).digest()).digest().hex()
-            self.transactions = self.select_random_transactions()
+
             merkle_hashes = [coinbase_tx_hash]
             for tx in self.transactions:
                 if 'hash' in tx and 'data' in tx:
@@ -243,6 +246,7 @@ class StratumProcessing:
 
         # Utilizar los datos recopilados y calculados desde el blocktemplate
         job = self.create_job_from_blocktemplate()
+
         if job is not None:
             local_header, _version, _prevhash, _merkle_root, _nbits, _ntime, _nonce, _coinbase1, _coinbase2 = self.create_block_header(
                 job['version'],
@@ -254,6 +258,7 @@ class StratumProcessing:
                 job['coinbase2']
             )
             _merkle_branch = job['merkle_branch']
+
             # pool_header = self.create_pool_header(version, prevhash, merkle_branch, ntime, nbits, coinbase1, coinbase2)
             print(f"Verificando job {job_id}...")
             # print(f"Header pool: {pool_header}")
@@ -559,7 +564,7 @@ class StratumProcessing:
 
     def calculate_coinbase_value(self):
         base_reward = self.block_template['coinbasevalue']
-        total_fees = sum(tx['fee'] for tx in self.block_template['transactions'])
+        total_fees = sum(tx['fee'] for tx in self.transactions)
         coinbase_value = base_reward + total_fees
         self.fee = coinbase_value
         return self.fee

@@ -126,10 +126,14 @@ class StratumProcessing:
             prev_block = self.block_template['previousblockhash']
             extranonce_placeholder = "00000000"
             miner_message = self.miner_message()
+
+            self.transactions = self.select_random_transactions()
+            self.fee = self.calculate_coinbase_value()
+
             coinbase1, coinbase2 = self.tx_make_coinbase_stratum(miner_message, extranonce_placeholder)
             coinbase_tx = coinbase1 + coinbase2
             coinbase_tx_hash = hashlib.sha256(hashlib.sha256(bytes.fromhex(coinbase_tx)).digest()).digest().hex()
-            self.transactions = self.select_random_transactions()
+
             merkle_hashes = [coinbase_tx_hash]
             for tx in self.transactions:
                 if 'hash' in tx and 'data' in tx:
