@@ -81,34 +81,38 @@ bitcoind -daemon
 # Esperar unos segundos para que bitcoind inicie
 sleep 10
 
+
 # Función para comprobar el estado de sincronización
 check_sync_status() {
     local progress
-    progress=$(bitcoin-cli -rpcuser=userbit -rpcpassword=passbit getblockchaininfo | jq -r '.verificationprogress')
+    progress=$(bitcoin-cli -rpcuser=$RPC_USER -rpcpassword=$RPC_PASSWORD -rpcconnect=$RPC_HOST -rpcport=$RPC_PORT getblockchaininfo | jq -r '.verificationprogress')
     if [[ $? -ne 0 ]]; then
         echo "No se pudo obtener el progreso de sincronización. Asegúrate de que bitcoind esté corriendo."
         return 1
     fi
-    echo "Progreso de sincronización: $(echo "$progress * 100" | bc)%"
+
+    # Verificar si progress es válido
+    if [[ -z "$progress" ]]; then
+        echo "No se pudo obtener el progreso de sincronización. Verifica que bitcoind esté corriendo y accesible."
+        return 1
+    fi
+
+    local progress_percent
+    progress_percent=$(echo "$progress * 100" | bc -l)
+    echo "Progreso de sincronización: $progress_percent%"
     return 0
 }
 
-# Esperar a que Bitcoin Core se sincronice completamente
-echo "Esperando a que Bitcoin Core se sincronice completamente..."
+# Bucle para comprobar el progreso cada 10 segundos
 while : ; do
-    sync_status=$(bitcoin-cli -rpcuser=userbit -rpcpassword=passbit getblockchaininfo | jq -r '.initialblockdownload')
-    if [ "$sync_status" == "false" ]; then
-        echo "Bitcoin Core se ha sincronizado completamente."
+    check_sync_status
+    if [[ $? -ne 0 ]]; then
+        echo "Error comprobando el estado de sincronización. Revisando logs de bitcoind."
+        tail -n 20 ~/.bitcoin/debug.log
         break
-    else
-        check_sync_status
-        if [[ $? -ne 0 ]]; then
-            echo "Error comprobando el estado de sincronización. Revisando logs de bitcoind."
-            tail -n 20 ~/.bitcoin/debug.log
-            break
-        fi
-        sleep 60
     fi
+    sleep 10
 done
+
 
 echo "Instalación y configuración de Bitcoin Core completa. Bitcoin Core se ha sincronizado en modo de recorte."
