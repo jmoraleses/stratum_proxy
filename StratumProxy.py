@@ -1,3 +1,4 @@
+import concurrent
 import socket
 import configparser
 import select
@@ -148,11 +149,12 @@ class StratumProxy:
                 if method == "mining.submit":
                     self.executor.submit(self.stratum_processing.process_submit, message_json.get("params", []),
                                          dest_sock)
+                    print("Procesando Submit")
                 elif method == "mining.notify":
                     self.executor.submit(self.stratum_processing.verify_job, message_json.get("params", []), dest_sock)
-
-                dest_sock.sendall(message.encode('utf-8') + b'\n')
-                print(f"Raw message: {message}")
+                else:
+                    dest_sock.sendall(message.encode('utf-8') + b'\n')
+                    print(f"Raw message: {message}")
 
             return buffer
         except Exception as e:
@@ -212,46 +214,48 @@ class StratumProcessing:
             miner_message = self.miner_message()
             merkle_root = None
 
-            while not self.proxy.check_merkle_root(merkle_root):
-                self.transactions = self.select_random_transactions()
+            def worker():
+                nonlocal merkle_root
+                while not self.proxy.check_merkle_root(merkle_root):
+                    self.transactions = self.select_random_transactions()
+                    self.fee = self.calculate_coinbase_value()
+                    coinbase1, coinbase2 = self.tx_make_coinbase_stratum(miner_message, extranonce_placeholder)
+                    coinbase_tx = coinbase1 + coinbase2
+                    coinbase_tx_hash = hashlib.sha256(
+                        hashlib.sha256(bytes.fromhex(coinbase_tx)).digest()).digest().hex()
 
-                self.fee = self.calculate_coinbase_value()
-                coinbase1, coinbase2 = self.tx_make_coinbase_stratum(miner_message, extranonce_placeholder)
-                coinbase_tx = coinbase1 + coinbase2
-                coinbase_tx_hash = hashlib.sha256(hashlib.sha256(bytes.fromhex(coinbase_tx)).digest()).digest().hex()
+                    merkle_hashes = [coinbase_tx_hash]
+                    for tx in self.transactions:
+                        if 'hash' in tx and 'data' in tx:
+                            merkle_hashes.append(tx['hash'])
+                        else:
+                            raise ValueError("Cada transacción debe contener 'hash' y 'data'")
 
-                merkle_hashes = [coinbase_tx_hash]
-                for tx in self.transactions:
-                    if 'hash' in tx and 'data' in tx:
-                        merkle_hashes.append(tx['hash'])
-                    else:
-                        raise ValueError("Cada transacción debe contener 'hash' y 'data'")
+                    merkle_branch = self.compute_merkle_branch(merkle_hashes)
+                    merkle_root_candidate = self.compute_merkle_root(merkle_hashes)
+                    self.proxy.generated_merkle_roots.append(merkle_root_candidate)
 
-                merkle_branch = self.compute_merkle_branch(merkle_hashes)
-                merkle_root = self.compute_merkle_root(merkle_hashes)
-                self.proxy.generated_merkle_roots.append(merkle_root)  # Guardar el merkle root generado
+                    if self.proxy.check_merkle_root(merkle_root_candidate):
+                        merkle_root = merkle_root_candidate
+                        return {
+                            'version': version,
+                            'prevhash': prev_block,
+                            'coinbase1': coinbase1,
+                            'coinbase2': coinbase2,
+                            'merkle_branch': merkle_branch,
+                            'merkle_root': merkle_root,
+                            'nbits': self.block_template['bits'],
+                            'ntime': int(time.time()),
+                            'job_id': random.randint(0, 0xFFFFFFFF),
+                            'clean_jobs': self.first_job or (self.height != self.block_template['height']),
+                        }
 
-                if self.proxy.check_merkle_root(merkle_root):
-
-                    self.target = self.bits_to_target(self.block_template["bits"])
-                    timestamp = int(time.time())
-                    nbits = self.block_template['bits']
-                    job_id = random.randint(0, 0xFFFFFFFF)
-                    clean_jobs = self.first_job or (self.height != self.block_template['height'])
-
-                    job = {
-                        'job_id': job_id,
-                        'version': version,
-                        'prevhash': prev_block,
-                        'coinbase1': coinbase1,
-                        'coinbase2': coinbase2,
-                        'merkle_branch': merkle_branch,
-                        'merkle_root': merkle_root,
-                        'nbits': nbits,
-                        'ntime': timestamp,
-                        'clean_jobs': clean_jobs,
-                    }
-                    return job
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = [executor.submit(worker) for _ in range(10)]
+                for future in concurrent.futures.as_completed(futures):
+                    job = future.result()
+                    if job:
+                        return job
 
         except Exception as e:
             print(f"Error creating job from blocktemplate: {e}")
@@ -265,26 +269,26 @@ class StratumProcessing:
             local_header, _version, _prevhash, _merkle_root, _nbits, _ntime, _nonce, _coinbase1, _coinbase2 = self.create_block_header(
                 job['version'], job['prevhash'], job['merkle_root'], job['ntime'], job['nbits'], job['coinbase1'],
                 job['coinbase2'])
-            if self.proxy.check_merkle_root(_merkle_root):
-                self.jobs[job_id] = {
-                    "job_id": job_id,
-                    "prevhash": _prevhash,
-                    "coinbase1": _coinbase1,
-                    "coinbase2": _coinbase2,
-                    "merkle_root": _merkle_root,
-                    "merkle_branch": job['merkle_branch'],
-                    "version": _version,
-                    "nbits": _nbits,
-                    "local_header": local_header
-                }
-                local_notify = {
-                    "id": None,
-                    "method": "mining.notify",
-                    "params": [job_id, _prevhash, _coinbase1, _coinbase2, job['merkle_branch'], _version, _nbits,
-                               job['ntime'], job['clean_jobs']]
-                }
-                miner_sock.sendall(json.dumps(local_notify).encode('utf-8') + b'\n')
-                print(f"Trabajo enviado: {job_id}")
+
+            self.jobs[job_id] = {
+                "job_id": job_id,
+                "prevhash": _prevhash,
+                "coinbase1": _coinbase1,
+                "coinbase2": _coinbase2,
+                "merkle_root": _merkle_root,
+                "merkle_branch": job['merkle_branch'],
+                "version": _version,
+                "nbits": _nbits,
+                "local_header": local_header
+            }
+            local_notify = {
+                "id": None,
+                "method": "mining.notify",
+                "params": [job_id, _prevhash, _coinbase1, _coinbase2, job['merkle_branch'], _version, _nbits,
+                           job['ntime'], job['clean_jobs']]
+            }
+            miner_sock.sendall(json.dumps(local_notify).encode('utf-8') + b'\n')
+            print(f"Trabajo enviado: {job_id}")
 
     def process_submit(self, submit_params, miner_sock):
         worker_name = submit_params[0]
