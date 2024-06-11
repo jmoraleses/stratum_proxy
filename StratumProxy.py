@@ -8,6 +8,8 @@ import hashlib
 import random
 import struct
 import time
+import uuid
+
 import pandas as pd
 import requests
 from concurrent.futures import ThreadPoolExecutor
@@ -16,12 +18,8 @@ from DatabaseHandler import DatabaseHandler
 
 
 class StratumProxy:
-    def __init__(self, pool_address, miner_port, config):
-        self.pool_address = pool_address
+    def __init__(self, miner_port, config):
         self.miner_port = miner_port
-        self.pool_host = self.pool_address.split('//')[1].split(':')[0]
-        self.pool_port = int(self.pool_address.split(':')[2])
-        self.pool_sock = None
         self.db_handler = DatabaseHandler(config.get('DATABASE', 'db_file')).create_table()
         self.stratum_processing = StratumProcessing(config, self)
         self.generated_merkle_roots = []
@@ -31,10 +29,9 @@ class StratumProxy:
         self.executor = ThreadPoolExecutor(max_workers=5)
 
     def start(self):
-        if self.connect_to_pool():
-            threading.Thread(target=self.block_template_updater).start()
-            threading.Thread(target=self.merkle_root_counter).start()
-            self.wait_for_miners()
+        threading.Thread(target=self.block_template_updater, daemon=True).start()
+        threading.Thread(target=self.merkle_root_counter, daemon=True).start()
+        self.wait_for_miners()
 
     def block_template_updater(self):
         while True:
@@ -44,7 +41,7 @@ class StratumProxy:
     def merkle_root_counter(self):
         while True:
             self.count_valid_merkle_roots()
-            time.sleep(600)
+            time.sleep(60)
 
     def load_merkle_counts(self, file_path):
         try:
@@ -63,21 +60,7 @@ class StratumProxy:
         valid_count = sum(1 for root in self.generated_merkle_roots if self.check_merkle_root(root))
         print(
             f"Cantidad de merkle roots válidos en el último minuto: {valid_count} de {len(self.generated_merkle_roots)}")
-        self.valid_merkle_count = 0
         self.generated_merkle_roots = []
-
-    def connect_to_pool(self):
-        try:
-            print(f"Resolviendo el dominio {self.pool_host}...")
-            print(f"Conectando a la pool en {self.pool_host}:{self.pool_port}...")
-            self.pool_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.pool_sock.settimeout(30)
-            self.pool_sock.connect((self.pool_host, self.pool_port))
-            print("Conexión establecida con la pool.")
-            return True
-        except Exception as e:
-            print(f"Error al conectar a la pool: {e}")
-            return False
 
     def wait_for_miners(self):
         try:
@@ -94,40 +77,18 @@ class StratumProxy:
 
     def handle_miner_connection(self, miner_sock):
         try:
-            pool_sock = self.create_pool_socket()
-            if not pool_sock:
-                miner_sock.close()
-                return
-
-            pool_buffer = ""
             miner_buffer = ""
 
             while True:
-                ready_socks, _, _ = select.select([miner_sock, pool_sock], [], [])
+                ready_socks, _, _ = select.select([miner_sock], [], [])
                 for sock in ready_socks:
-                    if sock == miner_sock:
-                        miner_buffer = self.proxy_message(miner_sock, pool_sock, miner_buffer, "miner")
-                        if miner_buffer is None:
-                            return
-                    elif sock == pool_sock:
-                        pool_buffer = self.proxy_message(pool_sock, miner_sock, pool_buffer, "pool")
-                        if pool_buffer is None:
-                            return
+                    miner_buffer = self.proxy_message(miner_sock, miner_sock, miner_buffer, "miner")
+                    if miner_buffer is None:
+                        return
         except Exception as e:
             print(f"Error en handle_miner_connection: {e}")
         finally:
             miner_sock.close()
-            self.pool_sock.close()
-
-    def create_pool_socket(self):
-        try:
-            pool_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            pool_sock.settimeout(30)
-            pool_sock.connect((self.pool_host, self.pool_port))
-            return pool_sock
-        except Exception as e:
-            print(f"Error al crear socket de conexión a la pool: {e}")
-            return None
 
     def proxy_message(self, source_sock, dest_sock, buffer, source):
         try:
@@ -136,6 +97,7 @@ class StratumProxy:
                 return None
             buffer += data
             while '}' in buffer:
+
                 end_idx = buffer.index('}') + 1
                 message = buffer[:end_idx]
                 buffer = buffer[end_idx:]
@@ -146,15 +108,23 @@ class StratumProxy:
                     continue
 
                 method = message_json.get("method")
+                request_id = message_json.get("id")
+
                 if method == "mining.submit":
-                    self.executor.submit(self.stratum_processing.process_submit, message_json.get("params", []),
-                                         dest_sock)
-                    print("Procesando Submit")
+                    self.executor.submit(self.stratum_processing.process_submit, message_json.get("params", []), dest_sock)
                 elif method == "mining.notify":
                     self.executor.submit(self.stratum_processing.verify_job, message_json.get("params", []), dest_sock)
+                elif method == "mining.authorize":
+                    self.executor.submit(self.stratum_processing.authorize_miner, message_json.get("params", []), request_id, dest_sock)
+                elif method == "mining.subscribe":
+                    self.executor.submit(self.stratum_processing.handle_subscribe, request_id, dest_sock)
+                elif method == "mining.set_difficulty":
+                    self.executor.submit(self.stratum_processing.set_difficulty, message_json.get("params", []), dest_sock)
+                elif method == "mining.extranonce.subscribe":
+                    self.executor.submit(self.stratum_processing.handle_extranonce_subscribe, request_id, dest_sock)
                 else:
                     dest_sock.sendall(message.encode('utf-8') + b'\n')
-                    print(f"Raw message: {message}")
+                    print(f"Mensaje no reconocido: {message}")
 
             return buffer
         except Exception as e:
@@ -262,7 +232,7 @@ class StratumProcessing:
             return None
 
     def verify_job(self, job_params, miner_sock):
-        job_id = job_params[0]
+        job_id = str(uuid.uuid4().hex[:6]) #job_params[0]
         self.update_block_template()
         job = self.create_job_from_blocktemplate()
         if job:
@@ -279,15 +249,17 @@ class StratumProcessing:
                 "merkle_branch": job['merkle_branch'],
                 "version": _version,
                 "nbits": _nbits,
+                "ntime": _ntime,
                 "local_header": local_header
             }
             local_notify = {
                 "id": None,
                 "method": "mining.notify",
                 "params": [job_id, _prevhash, _coinbase1, _coinbase2, job['merkle_branch'], _version, _nbits,
-                           job['ntime'], job['clean_jobs']]
+                           _ntime, job['clean_jobs']]
             }
             miner_sock.sendall(json.dumps(local_notify).encode('utf-8') + b'\n')
+            print(local_notify)
             print(f"Trabajo enviado: {job_id}")
 
     def process_submit(self, submit_params, miner_sock):
@@ -302,7 +274,8 @@ class StratumProcessing:
         job = self.jobs.get(job_id)
         if not job:
             response = {"id": None, "result": None, "error": [23, "Job ID not found", ""]}
-            miner_sock.sendall(json.dumps(response).encode('utf-8'))
+            miner_sock.sendall(json.dumps(response).encode('utf-8') + b'\n')
+            print(response)
             return
 
         block_header = self.create_block_header_submit(job['version'], job['prevhash'], job['merkle_branch'],
@@ -312,11 +285,12 @@ class StratumProcessing:
                                                        extranonce2)
 
         print(f"header: {block_header}")
-        print(f"local_header: {job['local_header']}")
+        print(f"local:  {job['local_header']}")
 
         block_hash = hashlib.sha256(hashlib.sha256(bytes.fromhex(block_header)).digest()).digest().hex()
         target = int(self.bits_to_target(job['nbits']), 16)
-        print(f"block hash: {block_hash}")
+        print(f"blockhash: {block_hash}")
+        print(f"target:    {target}")
 
         if int(block_hash, 16) < target:
             rpc_user = self.config.get('RPC', 'user')
@@ -325,18 +299,60 @@ class StratumProcessing:
             rpc_port = self.config.get('RPC', 'port')
             rpc_url = f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}"
             block_data = {"method": "submitblock", "params": [block_header], "id": 1, "jsonrpc": "2.0"}
-
             response = requests.post(rpc_url, json=block_data).json()
+
             if 'error' in response and response['error']:
                 error = response['error']
                 response = {"id": None, "result": None, "error": error}
-                miner_sock.sendall(json.dumps(response).encode('utf-8'))
+                miner_sock.sendall(json.dumps(response).encode('utf-8') + b'\n')
             else:
                 response = {"id": None, "result": True, "error": None}
-                miner_sock.sendall(json.dumps(response).encode('utf-8'))
+                miner_sock.sendall(json.dumps(response).encode('utf-8') + b'\n')
         else:
             response = {"id": None, "result": None, "error": [23, "Difficulty too low", ""]}
-            miner_sock.sendall(json.dumps(response).encode('utf-8'))
+            miner_sock.sendall(json.dumps(response).encode('utf-8') + b'\n')
+
+    def handle_subscribe(self, request_id, miner_sock):
+        try:
+            subscription_id = uuid.uuid4().hex  # Generar UUID sin guiones
+            extranonce1 = uuid.uuid4().hex[:8]  # Asegurar que extranonce1 tenga la longitud adecuada
+
+            response = {
+                "id": request_id,
+                "result": [[subscription_id, extranonce1], extranonce1, 4],
+                "error": None
+            }
+            miner_sock.sendall(json.dumps(response).encode('utf-8') + b'\n')
+            print(f"Suscripción enviada: {request_id}")
+        except Exception as e:
+            print(f"Error handling subscribe: {e}")
+            return {"id": request_id, "result": None, "error": str(e)}, None
+
+    def handle_extranonce_subscribe(self, request_id, miner_sock):
+        try:
+            response = {
+                "id": request_id,
+                "result": True,
+                "error": None
+            }
+            miner_sock.sendall(json.dumps(response).encode('utf-8') + b'\n')
+            print(f"Extranonce subscribe handled: {request_id}")
+        except Exception as e:
+            print(f"Error handling extranonce subscribe: {e}")
+            response = {
+                "id": request_id,
+                "result": None,
+                "error": str(e)
+            }
+            miner_sock.sendall(json.dumps(response).encode('utf-8') + b'\n')
+
+    def authorize_miner(self, params, request_id, miner_sock):
+        response = {"id": None, "result": True, "error": None}
+        miner_sock.sendall(json.dumps(response).encode('utf-8') + b'\n')
+        print(f"Minero {params[0]} autorizado")
+        self.handle_subscribe(request_id, miner_sock)
+        self.set_difficulty([self.min_difficulty], miner_sock)
+        self.verify_job([request_id], miner_sock)
 
     def set_difficulty(self, params, miner_sock):
         try:
@@ -344,14 +360,9 @@ class StratumProcessing:
             difficulty = max(self.min_difficulty, min(self.max_difficulty, difficulty))
             print(f"Estableciendo dificultad a {difficulty}")
             difficulty_message = {"id": None, "method": "mining.set_difficulty", "params": [difficulty]}
-            miner_sock.sendall(json.dumps(difficulty_message).encode('utf-8'))
+            miner_sock.sendall(json.dumps(difficulty_message).encode('utf-8') + b'\n')
         except Exception as e:
             print(f"Error estableciendo la dificultad: {e}")
-
-    def authorize_miner(self, params, miner_sock):
-        response = {"id": None, "result": True, "error": None}
-        miner_sock.sendall(json.dumps(response).encode('utf-8'))
-        print(f"Minero {params[0]} autorizado")
 
     def create_block_header(self, version, prev_block, merkle_root, ntime, nbits, coinbase1, coinbase2):
         version = struct.pack("<L", int(version, 16)).hex()
@@ -454,18 +465,10 @@ class StratumProcessing:
         return "6a" + data.encode('utf-8').hex()
 
     def select_random_transactions(self):
-        max_size_limit = random.randint(200, 1024) * 1024
-        transactions = self.block_template['transactions'].copy()
-        random.shuffle(transactions)
-        selected_transactions = []
-        total_size = 0
-        for transaction in transactions:
-            transaction_size = transaction.get('weight', 0)
-            if total_size + transaction_size <= max_size_limit:
-                selected_transactions.append(transaction)
-                total_size += transaction_size
-            else:
-                break
+        transactions = self.block_template["transactions"]
+        min_transactions, max_transactions = 4, 13
+        num_transactions = random.randint(min_transactions, max_transactions)
+        selected_transactions = random.sample(transactions, num_transactions)
         return selected_transactions
 
     def to_little_endian(self, hex_string):
@@ -522,9 +525,8 @@ def swap_endianness_8chars_final(hex_string):
 def main():
     config = configparser.ConfigParser()
     config.read('config.ini')
-    pool_address = f"stratum+tcp://{config['POOL']['host']}:{config['POOL']['port']}"
     miner_port = int(config['STRATUM']['port'])
-    proxy = StratumProxy(pool_address, miner_port, config)
+    proxy = StratumProxy(miner_port, config)
     proxy.start()
 
 
