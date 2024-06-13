@@ -16,7 +16,7 @@ fi
 HOME="/home/ubuntu"
 DATA_DIR="$HOME/.bitcoin"
 CONFIG_FILE="$DATA_DIR/bitcoin.conf"
-BOOTSTRAP_BASE_URL="https://github.com/Blockchains-Download/Bitcoin/releases/download/2024.05.01/Bitcoin-Blockchain-2024-05-01.7z."
+BOOTSTRAP_BASE_URL="https://github.com/Blockchains-Download/Bitcoin/releases/download/2024.06.05/Bitcoin-Blockchain-2024-06-05.7z."
 BOOTSTRAP_FILES=("001" "002" "003" "004")
 
 # Actualizar el sistema y instalar dependencias
@@ -45,13 +45,12 @@ cd $DATA_DIR
 for part in "${BOOTSTRAP_FILES[@]}"; do
     wget "${BOOTSTRAP_BASE_URL}${part}"
 done
-cat Bitcoin-Blockchain-2024-05-01.7z.* > Bitcoin-Blockchain-2024-05-01.7z
-7z x Bitcoin-Blockchain-2024-05-01.7z -o$DATA_DIR
+cat Bitcoin-Blockchain-2024-06-05.7z.* > Bitcoin-Blockchain-2024-06-05.7z
+7z x Bitcoin-Blockchain-2024-06-05.7z -o$DATA_DIR
 
 # Eliminar archivos de bootstrap después de la extracción
 echo "Eliminando archivos de bootstrap..."
-rm -f Bitcoin-Blockchain-2024-05-01.7z.*
-rm -f Bitcoin-Blockchain-2024-05-01.7z
+rm -f Bitcoin-Blockchain-2024-06-05.7z.*
 
 # Configurar Bitcoin Core
 echo "Configurando Bitcoin Core en modo de recorte..."
