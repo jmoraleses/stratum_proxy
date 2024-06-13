@@ -12,7 +12,7 @@ class BlockTemplate:
         self.template = None
         self.submission_response = None
 
-        print(f"Initialized BlockTemplateFetcher with URL: {self.rpc_url}")
+        print(f"Initialized BlockTemplate with URL: {self.rpc_url}")
 
     def fetch_template(self):
         payload = json.dumps({
