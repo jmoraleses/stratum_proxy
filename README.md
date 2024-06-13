@@ -46,27 +46,32 @@ Stratum Pool is a cryptocurrency mining proxy that connects miners to a mining p
 
 3. Configure the `config.ini` file:
     ```ini
-    [POOL]
-    host = pool_host
-    port = pool_port
+[RPC]
+host = 127.0.0.1
+port = 8332
+user = user
+password = password
 
-    [STRATUM]
-    port = stratum_port
+[STRATUM]
+port = 3330
 
-    [FILES]
-    merkle_file = merkle_file.csv
+[POOL]
+host = stratum.solomining.io
+port = 7777
 
-    [ADDRESS]
-    address = your_bitcoin_address
+[FILES]
+merkle_file = merkle_counts_5.csv
 
-    [DIFFICULTY]
-    min = 1
-    max = 1000
+[ADDRESS]
+address = 18KT4CzQnz5CSC5u57apcKRwb7bBSwntmz
 
-    [RPC]
-    user = rpc_user
-    password = rpc_password
-    ```
+[DATABASE]
+db_file = merkle_roots.db
+
+[DIFFICULTY]
+min = 23000
+max = 128000
+```
 
 ## Usage
 
