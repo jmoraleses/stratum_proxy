@@ -1,16 +1,10 @@
 # Stratum Proxy
 
-Stratum Proxy is a cryptocurrency mining proxy that connects miners to a mining pool, managing difficulty and miner authorizations.
+Stratum Pool is a cryptocurrency mining proxy that connects miners to a mining pool, managing difficulty and miner authorizations.
 
-## StratumProxyZMQ
-`StratumProxyZMQ` is a mining proxy similar to `StratumProxyPool`, but instead of using the ZMQ protocol, it connects to Bitcoin Core via RPC. It manages the communication between miners and the mining server, facilitating efficient task distribution and result collection through RPC connections. This design enhances scalability and reduces latency in data transmission, making it ideal for high-demand mining environments.
 
-## StratumProxyPool
-`StratumProxyPool` is a mining proxy designed for integration with mining pools. It connects to Bitcoin Core via RPC and aggregates multiple miner connections, managing job distribution, and collecting shares from miners. It optimizes mining pool operations for better organization and efficiency.
-
-## ProxyCPU
-`ProxyCPU` is a mining proxy that operates under CPU control and also connects to Bitcoin Core via RPC. Unlike other proxies, it does not utilize or expect connections from ASICs. This makes `ProxyCPU` suitable for testing, development, and environments where CPU usage is preferable or more accessible.
-
+## StratumPool
+`StratumPool` is a mining proxy designed for integration with mining pools. It connects to Bitcoin Core via RPC and aggregates multiple miner connections, managing job distribution, and collecting shares from miners. It optimizes mining pool operations for better organization and efficiency.
 
 ## Features
 
