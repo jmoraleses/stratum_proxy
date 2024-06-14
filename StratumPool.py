@@ -345,7 +345,7 @@ class StratumProcessing:
                 job = self.proxy.generated_jobs.pop(0)  # Obtener el primer trabajo generado
                 # self.proxy.job_semaphore.release()  # Incrementar el contador del semáforo
                 # job['job_id'] = job_id
-                self.jobs[ntime] = job
+                self.jobs[ntime].append(job)
                 local_notify = {
                     "id": None,
                     "method": "mining.notify",
@@ -370,51 +370,55 @@ class StratumProcessing:
         print(f"Procesando submit del minero, ntime: {ntime}:")
         print(f"extranonce2: {extranonce2}, ntime: {ntime}, nonce: {nonce}")
 
-        job = self.jobs.get(ntime)
-        if job is None:
-            print("Job ID no encontrado.")
-            return
 
-        if job['height'] != self.height:
-            print("El bloque cambió, la altura no coincide.")
-            return
+        jobs_me = self.jobs.get(ntime)
 
-        # Crear el coinbase transaction
-        coinbase_transaction = job['coinbase1'] + extranonce2 + job['coinbase2']
-        coinbase_tx_hash = double_sha256(coinbase_transaction)
+        for job in jobs_me:
 
-        # Crear el Merkle Root
-        merkle_hashes = [coinbase_tx_hash] + job['merkle_branch']
-        merkle_root = self.compute_merkle_root(merkle_hashes)
-        merkle_root = self.to_little_endian(merkle_root)
+            if job is None:
+                print("Job ID no encontrado.")
+                return
 
-        # Crear el encabezado del bloque
-        block_header = (
-                job['version'] +
-                job['prevhash'] +
-                merkle_root +
-                ntime +
-                job['nbits'] +
-                self.to_little_endian(nonce)
-        )
+            if job['height'] != self.height:
+                print("El bloque cambió, la altura no coincide.")
+                return
 
-        # Verificar el bloque
-        target = int(self.bits_to_target(job['nbits']), 16)
+            # Crear el coinbase transaction
+            coinbase_transaction = job['coinbase1'] + extranonce2 + job['coinbase2']
+            coinbase_tx_hash = double_sha256(coinbase_transaction)
 
-        if verify_block_header(block_header, target):
-            print("¡¡¡El bloque es válido!!!")
-            rpc_user = self.config.get('RPC', 'user')
-            rpc_password = self.config.get('RPC', 'password')
-            rpc_host = self.config.get('RPC', 'host')
-            rpc_port = self.config.get('RPC', 'port')
-            rpc_url = f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}"
-            block_data = {"method": "submitblock", "params": [block_header], "id": 1, "jsonrpc": "2.0"}
-            response = requests.post(rpc_url, json=block_data).json()
-            print(f"Respuesta del servidor RPC: {response}")
-        else:
-            print("El bloque no es válido.")
+            # Crear el Merkle Root
+            merkle_hashes = [coinbase_tx_hash] + job['merkle_branch']
+            merkle_root = self.compute_merkle_root(merkle_hashes)
+            merkle_root = self.to_little_endian(merkle_root)
 
-        print(f"Encabezado del bloque: {block_header}")
+            # Crear el encabezado del bloque
+            block_header = (
+                    job['version'] +
+                    job['prevhash'] +
+                    merkle_root +
+                    ntime +
+                    job['nbits'] +
+                    self.to_little_endian(nonce)
+            )
+
+            # Verificar el bloque
+            target = int(self.bits_to_target(job['nbits']), 16)
+
+            if verify_block_header(block_header, target):
+                print("¡¡¡El bloque es válido!!!")
+                rpc_user = self.config.get('RPC', 'user')
+                rpc_password = self.config.get('RPC', 'password')
+                rpc_host = self.config.get('RPC', 'host')
+                rpc_port = self.config.get('RPC', 'port')
+                rpc_url = f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}"
+                block_data = {"method": "submitblock", "params": [block_header], "id": 1, "jsonrpc": "2.0"}
+                response = requests.post(rpc_url, json=block_data).json()
+                print(f"Respuesta del servidor RPC: {response}")
+            else:
+                print("El bloque no es válido.")
+
+            print(f"Encabezado del bloque: {block_header}")
 
         # message_json = {'id': job_id, 'error': None, 'result': True}
         # dest_sock.sendall(json.dumps(message_json).encode('utf-8') + b'\n')
