@@ -1,44 +1,50 @@
+import concurrent
+import signal
+import socket
+import configparser
+import select
+import sys
+import threading
+import json
 import hashlib
 import random
 import struct
-import concurrent.futures
-import configparser
-import json
-import select
-import socket
-import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
-import signal
-import sys
+import uuid
 
 import pandas as pd
 import requests
-
+from concurrent.futures import ThreadPoolExecutor
 from BlockTemplate import BlockTemplate
+from DatabaseHandler import DatabaseHandler
 
 
 class StratumProxy:
-    def __init__(self, pool_address, miner_port, config):
-        self.pool_address = pool_address
+    def __init__(self, miner_port, config):
         self.miner_port = miner_port
-        self.pool_host = self.pool_address.split('//')[1].split(':')[0]
-        self.pool_port = int(self.pool_address.split(':')[2])
-        self.pool_sock = None
-        self.stratum_processing = StratumProcessing(self, config)
-        self.executor = ThreadPoolExecutor(max_workers=10000)
-        self.job_semaphore = threading.Semaphore(1000)  # Limitar a 1000 trabajos
-        self.generated_jobs = []
+        self.db_handler = DatabaseHandler(config.get('DATABASE', 'db_file')).create_table()
+        self.stratum_processing = StratumProcessing(config, self)
         self.generated_merkle_roots = []
         self.valid_merkle_count = 0
         self.merkle_counts_file = config.get('FILES', 'merkle_file')
         self.merkle_counts = self.load_merkle_counts(self.merkle_counts_file)
+        self.executor = ThreadPoolExecutor(max_workers=10000)
         self.server_sock = None
         self.active_sockets = []
-        self.stop_event = threading.Event()
-        self.mine = False
-        self.jobs = {}
+        self.job_semaphore = threading.Semaphore(1000)  # Limitar a 1000 trabajos
+        self.generated_jobs = []
 
+
+    def block_template_updater(self):
+        while True:
+            self.stratum_processing.block_template_fetcher.fetch_template()
+            time.sleep(2)
+
+    def merkle_root_counter(self):
+        time.sleep(60)
+        while True:
+            self.count_valid_merkle_roots()
+            time.sleep(60)
 
     def load_merkle_counts(self, file_path):
         try:
@@ -47,6 +53,17 @@ class StratumProxy:
         except Exception as e:
             print(f"Error loading merkle counts: {e}")
             return pd.DataFrame(columns=['merkle_root'])
+
+    def check_merkle_root(self, merkle_root):
+        if merkle_root:
+            return self.merkle_counts['merkle_root'].apply(lambda root: merkle_root.startswith(root)).any()
+        return False
+
+    def count_valid_merkle_roots(self):
+        valid_count = sum(1 for root in self.generated_merkle_roots if self.check_merkle_root(root))
+        print(
+            f"Cantidad de merkle roots válidos en el último minuto: {valid_count} de {len(self.generated_merkle_roots)}")
+        self.generated_merkle_roots = []
 
     def job_generator(self):
         time.sleep(2)
@@ -67,67 +84,41 @@ class StratumProxy:
             finally:
                 self.job_semaphore.release()
 
-    def block_template_updater(self):
-        while not self.stop_event.is_set():
-            self.stratum_processing.block_template_fetcher.fetch_template()
-            time.sleep(2)
-
-    def merkle_root_counter(self):
-        time.sleep(60)
-        while not self.stop_event.is_set():
-            self.count_valid_merkle_roots()
-            time.sleep(60)
-
-    def check_merkle_root(self, merkle_root):
-        if merkle_root:
-            return self.merkle_counts['merkle_root'].apply(lambda root: merkle_root.startswith(root)).any()
-        return False
-
-    def count_valid_merkle_roots(self):
-        valid_count = sum(1 for root in self.generated_merkle_roots if self.check_merkle_root(root))
-        print(
-            f"Cantidad de merkle roots válidos en el último minuto: {valid_count} de {len(self.generated_merkle_roots)}")
-        self.generated_merkle_roots = []
-
     def start(self):
         threading.Thread(target=self.block_template_updater, daemon=True).start()
         threading.Thread(target=self.merkle_root_counter, daemon=True).start()
-        threading.Thread(target=self.job_generator, daemon=True).start()
+        threading.Thread(target=self.job_generator, daemon=True).start()  # Iniciar el generador de trabajos
         print("Creando trabajos, esperando...")
         time.sleep(10)
-        if self.connect_to_pool():
-            self.wait_for_miners()
+        self.wait_for_miners()
 
-    def connect_to_pool(self):
-        try:
-            print(f"Resolviendo el dominio {self.pool_host}...")
-            print(f"Conectando a la pool en {self.pool_host}:{self.pool_port}...")
-
-            self.pool_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.pool_sock.settimeout(30)
-            self.pool_sock.connect((self.pool_host, self.pool_port))
-            print("Conexión establecida con la pool.")
-            return True
-        except Exception as e:
-            print(f"Error al conectar a la pool: {e}")
-            return False
+    def stop(self):
+        print("Cerrando todas las conexiones...")
+        for sock in self.active_sockets:
+            sock.close()
+        if self.server_sock:
+            self.server_sock.close()
+        self.executor.shutdown(wait=False)
+        print("Conexiones cerradas y recursos liberados.")
 
     def wait_for_miners(self):
         try:
             self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR,
+                                        1)  # Permitir reusar la dirección y puerto
             self.server_sock.bind(('0.0.0.0', self.miner_port))
             self.server_sock.listen(1000)
             print(f"Esperando conexiones de mineros en el puerto {self.miner_port}...")
 
-            while not self.stop_event.is_set():
+            while True:
                 try:
                     miner_sock, addr = self.server_sock.accept()
                     self.active_sockets.append(miner_sock)
                     print(f"Conexión establecida con el minero: {addr}")
-                    threading.Thread(target=self.handle_miner_connection, args=(miner_sock,), daemon=True).start()
-                except socket.timeout:
-                    continue
+                    self.executor.submit(self.handle_miner_connection, miner_sock)  # Usar ThreadPoolExecutor
+                except KeyboardInterrupt:
+                    print("Interrupción del teclado recibida, cerrando el servidor...")
+                    break
                 except Exception as e:
                     print(f"Error aceptando conexión de minero: {e}")
         except Exception as e:
@@ -137,44 +128,17 @@ class StratumProxy:
 
     def handle_miner_connection(self, miner_sock):
         try:
-            pool_sock = self.create_pool_socket()
-            if not pool_sock:
-                miner_sock.close()
-                return
-
-            pool_buffer = ""
             miner_buffer = ""
-
             while True:
-                ready_socks, _, _ = select.select([miner_sock, pool_sock], [], [], 1)
+                ready_socks, _, _ = select.select([miner_sock], [], [])
                 for sock in ready_socks:
-                    if sock == miner_sock:
-                        miner_buffer = self.proxy_message(miner_sock, pool_sock, miner_buffer, "miner")
-                        if miner_buffer is None:
-                            miner_sock.close()
-                            pool_sock.close()
-                            return
-                    elif sock == pool_sock:
-                        pool_buffer = self.proxy_message(pool_sock, miner_sock, pool_buffer, "pool")
-                        if pool_buffer is None:
-                            miner_sock.close()
-                            pool_sock.close()
-                            return
+                    miner_buffer = self.proxy_message(miner_sock, miner_sock, miner_buffer, "miner")
+                    if miner_buffer is None:
+                        return
         except Exception as e:
             print(f"Error en handle_miner_connection: {e}")
         finally:
             miner_sock.close()
-            self.pool_sock.close()
-
-    def create_pool_socket(self):
-        try:
-            pool_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            pool_sock.settimeout(30)
-            pool_sock.connect((self.pool_host, self.pool_port))
-            return pool_sock
-        except Exception as e:
-            print(f"Error al crear socket de conexión a la pool: {e}")
-            return None
 
     def proxy_message(self, source_sock, dest_sock, buffer, source):
         try:
@@ -186,41 +150,51 @@ class StratumProxy:
                 end_idx = buffer.index('}') + 1
                 message = buffer[:end_idx]
                 buffer = buffer[end_idx:]
-                message_json = json.loads(message)
+                try:
+                    message_json = json.loads(message)
+                except json.JSONDecodeError as e:
+                    print(f"Error decoding JSON: {e}")
+                    continue
 
-                if message_json.get("method") == "mining.notify" and source == "pool" and self.mine is False:
-                    self.mine = True
-                    self.stratum_processing.send_job(message_json, message, dest_sock)
-                elif message_json.get("method") == "mining.submit" and source == "miner":
-                    self.executor.submit(self.stratum_processing.process_submit, message_json)
-                    dest_sock.sendall(message.encode('utf-8') + b'\n')
-                    print(f"Mensaje {source} => {message}")
+                method = message_json.get("method")
+                request_id = message_json.get("id")
+                print(f"{source}: método: {method} => {message_json}")
+
+                if method == "mining.submit":
+                    self.executor.submit(self.stratum_processing.process_submit, message_json.get("params", []), source_sock)
+                    self.executor.submit(self.stratum_processing.send_job, message_json, dest_sock, False)
+                elif method == "mining.notify":
+                    self.executor.submit(self.stratum_processing.send_job, message_json, dest_sock, False)
+                elif method == "mining.authorize":
+                    self.stratum_processing.authorize_miner(message_json.get("params", []), request_id, dest_sock)
+                    self.stratum_processing.set_difficulty([self.stratum_processing.max_difficulty], dest_sock)
+                    self.executor.submit(self.stratum_processing.send_job, message_json, dest_sock, False)
+                elif method == "mining.subscribe":
+                    self.stratum_processing.handle_subscribe(request_id, dest_sock)
+                elif method == "mining.set_difficulty":
+                    self.stratum_processing.set_difficulty(message_json.get("params", []), dest_sock)
+                    self.executor.submit(self.stratum_processing.send_job, message_json, dest_sock, False)
+                elif method == "mining.extranonce.subscribe":
+                    self.stratum_processing.handle_extranonce_subscribe(request_id, dest_sock)
+                    self.executor.submit(self.stratum_processing.send_job, message_json, dest_sock, False)
+                elif method == "mining.suggest_difficulty":
+                    self.stratum_processing.suggest_difficulty(message_json.get("params", []), request_id, dest_sock)
                 else:
-                    dest_sock.sendall(message.encode('utf-8') + b'\n')
-                    print(f"Mensaje {source} => {message}")
-                    self.mine = False
+                    # dest_sock.sendall(json.dumps(message_json).encode('utf-8') + b'\n')
+                    print(f"MENSAJE NO ENCONTRADO {source}: {message_json}")
+
             return buffer
         except Exception as e:
             print(f"Error en proxy_message: {e}")
             return None
 
-    def stop(self):
-        print("Cerrando todas las conexiones...")
-        self.stop_event.set()
-        for sock in self.active_sockets:
-            sock.close()
-        if self.server_sock:
-            self.server_sock.close()
-        if self.pool_sock:
-            self.pool_sock.close()
-        print("Conexiones cerradas y recursos liberados.")
-
 
 class StratumProcessing:
-    def __init__(self, proxy, config):
+    def __init__(self, config, proxy):
         self.config = config
         self.proxy = proxy
         self.db_file = config.get('DATABASE', 'db_file')
+        self.db_handler = DatabaseHandler(self.db_file)
         self.block_template_fetcher = BlockTemplate(config)
         self.block_template = None
         self.coinbase_message = None
@@ -235,7 +209,9 @@ class StratumProcessing:
         self.transactions_raw = None
         self.min_difficulty = int(config.get('DIFFICULTY', 'min'))  # Inicializar la dificultad sugerida
         self.max_difficulty = int(config.get('DIFFICULTY', 'max'))  # Inicializar la dificultad sugerida
+        self.jobs = {}
         self.first_job = False
+
 
     def generate_jobs(self):
         self.update_block_template()
@@ -247,12 +223,12 @@ class StratumProcessing:
         prevhash = self.to_little_endian(swap_endianness_8chars_final(self.block_template['previousblockhash']))
 
         # coinbases public-pool.io
-        coinbase1 = '02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff170390ef0c5075626c69632d506f6f6c'
-        coinbase2 = 'ffffffff02ab4d2314000000001976a91450461e1ed5c51c677654f58274ca9a430fe71cbe88ac0000000000000000266a24aa21a9ed0d7abba2e4ffe9dbc1b989ebbc138653cd99ead1605b4633a84042738eb0449200000000'
+        # coinbase1 = '02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff170390ef0c5075626c69632d506f6f6c'
+        # coinbase2 = 'ffffffff02ab4d2314000000001976a91450461e1ed5c51c677654f58274ca9a430fe71cbe88ac0000000000000000266a24aa21a9ed0d7abba2e4ffe9dbc1b989ebbc138653cd99ead1605b4633a84042738eb0449200000000'
 
         # coinbases stratum.solomining.io
-        # coinbase1 = '01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff2f038cef0c0435db6a6604e2bb48060c'
-        # coinbase2 = '0a20f09f8f8620736f6c6f6d696e696e672e696fffffffff03b42efd13000000001976a91450461e1ed5c51c677654f58274ca9a430fe71cbe88ac0000000000000000266a24aa21a9ed66283abee887c98d1ad4159470dbe8cbb4c7405c905d1922a74d94bdb9d603334fb033000000000017a9145036c09c0c9a93dff6665ce4f1c4350796942d088700000000'
+        # coinbase1 = '02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff170390ef0c5075626c69632d506f6f6c'
+        # coinbase2 = 'ffffffff02ab4d2314000000001976a91450461e1ed5c51c677654f58274ca9a430fe71cbe88ac0000000000000000266a24aa21a9ed0d7abba2e4ffe9dbc1b989ebbc138653cd99ead1605b4633a84042738eb0449200000000'
 
         version = self.version_to_hex(self.block_template['version'])
         nbits = self.block_template['bits']
@@ -289,8 +265,15 @@ class StratumProcessing:
 
         while not stop_event.is_set():
             transactions = self.select_random_transactions()
+
+            extranonce_placeholder = "00000000"
+            coinbasevalue = self.calculate_coinbase_value(transactions)
+            miner_message = self.miner_message()
+            coinbase1, coinbase2 = self.tx_make_coinbase_stratum(miner_message, extranonce_placeholder, coinbasevalue)
+
             coinbase_tx = coinbase1 + coinbase2
             coinbase_tx_hash = hashlib.sha256(hashlib.sha256(bytes.fromhex(coinbase_tx)).digest()).digest().hex()
+
             merkle_hashes = [coinbase_tx_hash]
             for tx in transactions:
                 if 'hash' in tx and 'data' in tx:
@@ -311,7 +294,7 @@ class StratumProcessing:
                     'merkle_root': merkle_root_candidate,
                     'nbits': nbits,
                     'ntime': ntime,
-                    # 'job_id': random.randint(0, 0xFFFFFFFF),
+                    'job_id': random.randint(0, 0xFFFFFFFF),
                     'clean_jobs': False,
                 }
                 stop_event.set()  # Señalar a otros hilos que deben detenerse
@@ -334,64 +317,57 @@ class StratumProcessing:
             return None
         return valid_jobs
 
-    def send_job(self, message_json, message, miner_sock):
-        # job_id = str(uuid.uuid4().hex[:6])
-        job_params = message_json["params"]
-        job_id = job_params[0]
-        ntime = job_params[7]
-        clean_jobs = job_params[8]
+    def send_job(self, message_json, miner_sock, clean_jobs):
+        job_id = str(uuid.uuid4().hex[:6])
 
+        # job_params = message_json["params"]
+        # job_id = job_params[0]
+        # ntime = job_params[7]
+        # clean_jobs = job_params[8]
         if len(self.proxy.generated_jobs) > 0:
-            for _ in range(len(self.proxy.generated_jobs)):
-                job = self.proxy.generated_jobs.pop(0)  # Obtener el primer trabajo generado
-                # self.proxy.job_semaphore.release()  # Incrementar el contador del semáforo
-                # job['job_id'] = job_id
-                self.proxy.jobs[job_id] = job
-                # self.proxy.jobs_work.append(self.proxy.jobs[job_id])
-                local_notify = {
-                    "id": None,
-                    "method": "mining.notify",
-                    "params": [job_id, job['prevhash'], job['coinbase1'], job['coinbase2'], job['merkle_branch'],
-                               job['version'],
-                               job['nbits'], ntime, clean_jobs]
-                }
-                miner_sock.sendall(json.dumps(local_notify).encode('utf-8') + b'\n')
-                print(f"Local notify:\n{local_notify}")
-                # print(f"Trabajo enviado: {job_id}")
+            # for job in self.proxy.generated_jobs:
+            job = self.proxy.generated_jobs.pop(0)  # Obtener el primer trabajo generado
+            # self.proxy.job_semaphore.release()  # Incrementar el contador del semáforo
+            # job['job_id'] = job_id
+            self.jobs[job_id] = job
+            local_notify = {
+                "id": None,
+                "method": "mining.notify",
+                "params": [job_id, job['prevhash'], job['coinbase1'], job['coinbase2'], job['merkle_branch'],
+                           job['version'],
+                           job['nbits'], job['ntime'], clean_jobs]
+            }
+            miner_sock.sendall(json.dumps(local_notify).encode('utf-8') + b'\n')
+            print(f"Local notify:\n{local_notify}")
+            # print(f"Trabajo enviado: {job_id}")
         else:
             print("No hay trabajos disponibles en este momento.")
+            message = {'id': job_id, 'error': None, 'result': True}
             miner_sock.sendall(json.dumps(message).encode('utf-8') + b'\n')
 
-    def process_submit(self, message_json):
-        submit_params = message_json.get("params", [])
-        job_id = submit_params[2]
+
+    def process_submit(self, submit_params, miner_sock):
+        worker_name = submit_params[0]
+        job_id = submit_params[1]
         extranonce2 = submit_params[2]
         ntime = submit_params[3]
         nonce = submit_params[4]
 
-        print(f"Procesando submit del minero, ntime: {ntime}:")
+        print(f"Procesando submit del minero {worker_name} para el job {job_id}:")
         print(f"extranonce2: {extranonce2}, ntime: {ntime}, nonce: {nonce}")
 
-        job = self.proxy.jobs.get(job_id)
-
-        if job is None:
-            print("Job ID no encontrado.")
-            return
-
+        job = self.jobs.get(job_id)
         if job['height'] != self.height:
             print("El bloque cambió, la altura no coincide.")
             return
 
-        # Crear el coinbase transaction
         coinbase_transaction = job['coinbase1'] + extranonce2 + job['coinbase2']
-        coinbase_tx_hash = double_sha256(coinbase_transaction)
+        coinbase_tx_hash = hashlib.sha256(hashlib.sha256(bytes.fromhex(coinbase_transaction)).digest()).digest().hex()
 
-        # Crear el Merkle Root
         merkle_hashes = [coinbase_tx_hash] + job['merkle_branch']
         merkle_root = self.compute_merkle_root(merkle_hashes)
         merkle_root = self.to_little_endian(merkle_root)
 
-        # Crear el encabezado del bloque
         block_header = (
                 job['version'] +
                 job['prevhash'] +
@@ -401,11 +377,16 @@ class StratumProcessing:
                 self.to_little_endian(nonce)
         )
 
-        # Verificar el bloque
-        target = int(self.bits_to_target(job['nbits']), 16)
+        print(f"stratum: {block_header}")
+        print(f"job:     {job['local_header']}")
 
-        if verify_block_header(block_header, target):
-            print("¡¡¡El bloque es válido!!!")
+        block_hash = hashlib.sha256(hashlib.sha256(bytes.fromhex(block_header)).digest()).digest().hex()
+        target = int(self.bits_to_target(job['nbits']), 16)
+        target = '{:064x}'.format(target)
+        print(f"blockhash: {block_hash}")
+        print(f"target:    {target}")
+
+        if int(block_hash, 16) < int(target, 16):
             rpc_user = self.config.get('RPC', 'user')
             rpc_password = self.config.get('RPC', 'password')
             rpc_host = self.config.get('RPC', 'host')
@@ -414,20 +395,26 @@ class StratumProcessing:
             block_data = {"method": "submitblock", "params": [block_header], "id": 1, "jsonrpc": "2.0"}
             response = requests.post(rpc_url, json=block_data).json()
             print(f"Respuesta del servidor RPC: {response}")
-        else:
-            print("El bloque no es válido.")
 
-        print(f"Encabezado del bloque: {block_header}")
+        message = {'id': job_id, 'error': None, 'result': True}
+        miner_sock.sendall(json.dumps(message).encode('utf-8') + b'\n')
 
-        # message_json = {'id': job_id, 'error': None, 'result': True}
-        # dest_sock.sendall(json.dumps(message_json).encode('utf-8') + b'\n')
-        # if 'error' in response and response['error']:
-        #     error = response['error']
-        #     response = {"id": None, "result": None, "error": error}
-        #     miner_sock.sendall(json.dumps(response).encode('utf-8') + b'\n')
-        # else:
-        #     response = {"id": None, "result": True, "error": None}
-        #     miner_sock.sendall(json.dumps(response).encode('utf-8') + b'\n')
+
+    def handle_subscribe(self, request_id, miner_sock):
+        try:
+            subscription_id = uuid.uuid4().hex  # Generar UUID sin guiones
+            extranonce1 = uuid.uuid4().hex[:8]  # Asegurar que extranonce1 tenga la longitud adecuada
+
+            response = {
+                "id": request_id,
+                "result": [[subscription_id, extranonce1], extranonce1, 4],
+                "error": None
+            }
+            miner_sock.sendall(json.dumps(response).encode('utf-8') + b'\n')
+            print(f"Suscripción enviada con id {request_id}")
+        except Exception as e:
+            print(f"Error handling subscribe: {e}")
+            return {"id": request_id, "result": None, "error": str(e)}, None
 
     def handle_extranonce_subscribe(self, request_id, miner_sock):
         try:
@@ -437,7 +424,7 @@ class StratumProcessing:
                 "error": None
             }
             miner_sock.sendall(json.dumps(response).encode('utf-8') + b'\n')
-            print(f"Extranonce subscribe handled: {request_id}")
+            print(f"Response extranonce subscribe: {response}")
         except Exception as e:
             print(f"Error handling extranonce subscribe: {e}")
             response = {
@@ -464,7 +451,7 @@ class StratumProcessing:
     def authorize_miner(self, params, request_id, miner_sock):
         response = {"id": request_id, "result": True, "error": None}
         miner_sock.sendall(json.dumps(response).encode('utf-8') + b'\n')
-        print(f"Minero {params[0]} autorizado")
+        print(f"Minero autorizado => {response}")
 
     def set_difficulty(self, params, miner_sock):
         try:
@@ -483,16 +470,7 @@ class StratumProcessing:
         merkle_hashes = [coinbase_tx_hash] + merkle_branch
         merkle_root = self.compute_merkle_root(merkle_hashes)
 
-        # version = self.version_to_hex(self.block_template['version'])
-        # version = swap_endianness_8chars_final(version)
-        # prev_block = swap_endianness_8chars_final(prev_block)
-        # prev_block = self.to_little_endian(prev_block)
-
         merkle_root = self.to_little_endian(merkle_root)
-        # nbits = struct.pack("<L", int(nbits, 16)).hex()
-        # nbits = swap_endianness_8chars_final(nbits)
-        # ntime = struct.pack("<L", ntime).hex()
-        # ntime = swap_endianness_8chars_final(ntime)
         nonce = struct.pack("<L", random.randint(0, 0xFFFFFFFF)).hex()  # Nonce simulado
 
         header = version + prev_block + merkle_root + ntime + nbits + nonce
@@ -500,8 +478,7 @@ class StratumProcessing:
         return header, version, prev_block, merkle_root, nbits, ntime, nonce, coinbase1, coinbase2
 
     def create_block_header_submit(self, version, prevhash, merkle_branch, ntime, nbits, coinbase1, coinbase2,
-                                   nonce,
-                                   extranonce2):
+                                   nonce, extranonce2):
         version = self.to_little_endian(version)
         prevhash = self.to_little_endian(prevhash)
         coinbase_transaction = coinbase1 + extranonce2 + coinbase2
@@ -555,30 +532,48 @@ class StratumProcessing:
         coinbase_script = block_height_script + miner_message_hex
         return coinbase_script
 
-    def tx_make_coinbase_stratum(self, miner_message, extranonce_placeholder="00000000", coinbasevalue=3,
-                                 op_return_data=""):
+    def tx_make_coinbase_stratum(self, miner_message, extranonce_placeholder="00000000", coinbasevalue=3, op_return_data=""):
         pubkey_script = "76a914" + self.bitcoinaddress2hash160(self.address) + "88ac"
-
-        block_height = self.block_template['height']
+        block_height = self.height
         coinbase_script = self.create_coinbase_script(block_height, miner_message, extranonce_placeholder)
-        max_coinbase_script_size = 100 * 2
-        actual_script_size = len(coinbase_script) + len(extranonce_placeholder)
 
+        # Ajustar el coinbase_script para que siempre sea correcto
+        max_coinbase_script_size = 100 * 2  # 100 bytes in hex characters
+        actual_script_size = len(coinbase_script) + len(extranonce_placeholder)
         if actual_script_size > max_coinbase_script_size:
             coinbase_script = coinbase_script[:max_coinbase_script_size - len(extranonce_placeholder)]
-        coinbase1 = "02000000" + "01" + "0" * 64 + "ffffffff" + self.int2varinthex(
-            (len(coinbase_script) + len(extranonce_placeholder)) // 2) + coinbase_script + extranonce_placeholder
+
+        coinbase1 = (
+                "02000000"  # Transacción de versión
+                + "01"  # Número de entradas
+                + "0" * 64  # Hash previo (32 bytes de ceros)
+                + "ffffffff"  # Índice previo (4 bytes de f's)
+                + self.int2varinthex((len(coinbase_script) + len(extranonce_placeholder)) // 2)
+                + coinbase_script
+                + extranonce_placeholder
+        )
+
         num_outputs = "01"
-        op_return_script = ""
-        op_return_length = ""
-        if op_return_data:
+        if op_return_data != "":
             op_return_script = self.create_op_return_script(op_return_data)
             op_return_length = self.int2varinthex(len(op_return_script) // 2)
             num_outputs = "02"
+        else:
+            op_return_script = ""
+            op_return_length = ""
 
-        coinbase2 = "ffffffff" + num_outputs + self.int2lehex(coinbasevalue, 8) + self.int2varinthex(
-            len(pubkey_script) // 2) + pubkey_script + "00000000" + op_return_length + op_return_script
+        coinbase2 = (
+                "ffffffff"  # Secuencia (4 bytes de f's)
+                + num_outputs  # Número de salidas (1 normal + 1 OP_RETURN si existe)
+                + self.int2lehex(coinbasevalue, 8)  # Recompensa en little-endian (8 bytes)
+                + self.int2varinthex(len(pubkey_script) // 2)  # Longitud del pubkey_script
+                + pubkey_script  # Script público
+                + "00000000"  # Bloque de tiempo de lock (4 bytes de ceros)
+                + op_return_length  # Longitud del OP_RETURN script
+                + op_return_script  # OP_RETURN script
+        )
         return coinbase1, coinbase2
+
 
     def calculate_coinbase_value(self, transactions):
         base_reward = self.block_template['coinbasevalue']
@@ -653,32 +648,19 @@ def swap_endianness_8chars_final(hex_string):
          range(0, len(hex_string), 8)])
 
 
-def double_sha256(data):
-    """ Aplica SHA256 dos veces a los datos dados. """
-    return hashlib.sha256(hashlib.sha256(bytes.fromhex(data)).digest()).hexdigest()
-
-
-def verify_block_header(block_header, target):
-    """ Verifica que el hash del encabezado del bloque cumple con el target. """
-    block_hash = double_sha256(block_header)
-    return int(block_hash, 16) < int(target, 16)
-
-
 def main():
     config = configparser.ConfigParser()
     config.read('config.ini')
-
-    pool_address = f"stratum+tcp://{config['POOL']['host']}:{config['POOL']['port']}"
     miner_port = int(config['STRATUM']['port'])
-
-    proxy = StratumProxy(pool_address, miner_port, config)
+    proxy = StratumProxy(miner_port, config)
 
     def signal_handler(sig, frame):
-        print('Interrupción recibida, cerrando conexiones...')
+        print("Señal recibida, cerrando el servidor...")
         proxy.stop()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     proxy.start()
 
