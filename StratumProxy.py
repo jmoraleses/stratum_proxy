@@ -39,7 +39,6 @@ class StratumProxy:
         self.mine = False
         self.jobs = {}
 
-
     def load_merkle_counts(self, file_path):
         try:
             df = pd.read_csv(file_path)
@@ -60,8 +59,8 @@ class StratumProxy:
                     time.sleep(1)
                     continue
                 if len(self.generated_jobs) == 0:
-                    print("No se generaron trabajos.")
-                    # time.sleep(1)
+                    # print("No se generaron trabajos.")
+                    time.sleep(1)
             except Exception as e:
                 print(f"Error al generar trabajos: {e}")
             finally:
@@ -192,7 +191,7 @@ class StratumProxy:
                     self.mine = True
                     self.stratum_processing.send_job(message_json, message, dest_sock)
                 elif message_json.get("method") == "mining.submit" and source == "miner":
-                    self.executor.submit(self.stratum_processing.process_submit, message_json)
+                    self.stratum_processing.process_submit(message_json)
                     dest_sock.sendall(message.encode('utf-8') + b'\n')
                     print(f"Mensaje {source} => {message}")
                 else:
@@ -236,6 +235,8 @@ class StratumProcessing:
         self.min_difficulty = int(config.get('DIFFICULTY', 'min'))  # Inicializar la dificultad sugerida
         self.max_difficulty = int(config.get('DIFFICULTY', 'max'))  # Inicializar la dificultad sugerida
         self.first_job = False
+        self.coinbase1 = None
+        self.coinbase2 = None
 
     def generate_jobs(self):
         self.update_block_template()
@@ -244,21 +245,19 @@ class StratumProcessing:
             time.sleep(1)  # Esperar antes de intentar nuevamente
             return
 
+        if self.coinbase1 is None or self.coinbase2 is None:
+            # print("Coinbase no encontrada, esperando...")
+            # time.sleep(1)  # Esperar antes de intentar nuevamente
+            return
+
+
         prevhash = self.to_little_endian(swap_endianness_8chars_final(self.block_template['previousblockhash']))
-
-        # coinbases public-pool.io
-        coinbase1 = '02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff170390ef0c5075626c69632d506f6f6c'
-        coinbase2 = 'ffffffff02ab4d2314000000001976a91450461e1ed5c51c677654f58274ca9a430fe71cbe88ac0000000000000000266a24aa21a9ed0d7abba2e4ffe9dbc1b989ebbc138653cd99ead1605b4633a84042738eb0449200000000'
-
-        # coinbases stratum.solomining.io
-        # coinbase1 = '01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff2f038cef0c0435db6a6604e2bb48060c'
-        # coinbase2 = '0a20f09f8f8620736f6c6f6d696e696e672e696fffffffff03b42efd13000000001976a91450461e1ed5c51c677654f58274ca9a430fe71cbe88ac0000000000000000266a24aa21a9ed66283abee887c98d1ad4159470dbe8cbb4c7405c905d1922a74d94bdb9d603334fb033000000000017a9145036c09c0c9a93dff6665ce4f1c4350796942d088700000000'
 
         version = self.version_to_hex(self.block_template['version'])
         nbits = self.block_template['bits']
         ntime = self.to_little_endian(self.int2lehex(int(time.time()), 4))
 
-        jobs = self.create_job_from_blocktemplate(version, prevhash, coinbase1, coinbase2, nbits, ntime)
+        jobs = self.create_job_from_blocktemplate(version, prevhash, self.coinbase1, self.coinbase2, nbits, ntime)
         if jobs:
             self.proxy.generated_jobs.extend(jobs)  # Añadir trabajos generados a la lista
 
@@ -337,33 +336,36 @@ class StratumProcessing:
     def send_job(self, message_json, message, miner_sock):
         # job_id = str(uuid.uuid4().hex[:6])
         job_params = message_json["params"]
-        job_id = job_params[0]
+        self.coinbase1 = str(job_params[2])
+        self.coinbase2 = str(job_params[3])
+        job_id = str(job_params[0])
         ntime = job_params[7]
         clean_jobs = job_params[8]
 
         if len(self.proxy.generated_jobs) > 0:
-            for _ in range(len(self.proxy.generated_jobs)):
-                job = self.proxy.generated_jobs.pop(0)  # Obtener el primer trabajo generado
-                # self.proxy.job_semaphore.release()  # Incrementar el contador del semáforo
-                # job['job_id'] = job_id
-                self.proxy.jobs[job_id] = job
-                # self.proxy.jobs_work.append(self.proxy.jobs[job_id])
-                local_notify = {
-                    "id": None,
-                    "method": "mining.notify",
-                    "params": [job_id, job['prevhash'], job['coinbase1'], job['coinbase2'], job['merkle_branch'],
-                               job['version'],
-                               job['nbits'], ntime, clean_jobs]
-                }
-                miner_sock.sendall(json.dumps(local_notify).encode('utf-8') + b'\n')
-                print(f"Local notify:\n{local_notify}")
-                # print(f"Trabajo enviado: {job_id}")
+            # for _ in range(len(self.proxy.generated_jobs)):
+            job = self.proxy.generated_jobs.pop(0)  # Obtener el primer trabajo generado
+            # self.proxy.job_semaphore.release()  # Incrementar el contador del semáforo
+            # job['job_id'] = job_id
+            self.proxy.jobs[job_id] = job
+            # self.proxy.jobs_work.append(self.proxy.jobs[job_id])
+            local_notify = {
+                "id": None,
+                "method": "mining.notify",
+                "params": [job_id, job['prevhash'], self.coinbase1, self.coinbase2, job['merkle_branch'],
+                           job['version'],
+                           job['nbits'], ntime, clean_jobs]
+            }
+            miner_sock.sendall(json.dumps(local_notify).encode('utf-8') + b'\n')
+            print(f"Local notify:\n{local_notify}")
+            # print(f"Trabajo enviado: {job_id}")>
         else:
             print("No hay trabajos disponibles en este momento.")
             miner_sock.sendall(json.dumps(message).encode('utf-8') + b'\n')
 
     def process_submit(self, message_json):
-        submit_params = message_json.get("params", [])
+        print(message_json)
+        submit_params = message_json["params"]
         job_id = submit_params[2]
         extranonce2 = submit_params[2]
         ntime = submit_params[3]
@@ -661,12 +663,13 @@ def double_sha256(data):
 def verify_block_header(block_header, target):
     """ Verifica que el hash del encabezado del bloque cumple con el target. """
     block_hash = double_sha256(block_header)
+    print(f"Hash: {block_hash}")
     return int(block_hash, 16) < int(target, 16)
 
 
 def main():
     config = configparser.ConfigParser()
-    config.read('config.ini')
+    config.read('config_solo.ini')
 
     pool_address = f"stratum+tcp://{config['POOL']['host']}:{config['POOL']['port']}"
     miner_port = int(config['STRATUM']['port'])
