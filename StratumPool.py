@@ -35,6 +35,7 @@ class StratumProxy:
         self.server_sock = None
         self.active_sockets = []
         self.stop_event = threading.Event()
+        self.mine = False
 
     def load_merkle_counts(self, file_path):
         try:
@@ -46,10 +47,22 @@ class StratumProxy:
 
     def job_generator(self):
         time.sleep(2)
-        while not self.stop_event.is_set():
+        while True:
             self.job_semaphore.acquire()
-            self.stratum_processing.generate_jobs()
-            time.sleep(0.1)
+            try:
+                self.stratum_processing.generate_jobs()
+                # Verificar si hay trabajos generados y manejar la espera si no hay
+                if not self.stratum_processing.block_template:
+                    print("Plantilla de bloque no disponible. Esperando antes de intentar nuevamente...")
+                    time.sleep(1)
+                    continue
+                if len(self.generated_jobs) == 0:
+                    print("No se generaron trabajos.")
+                    # time.sleep(1)
+            except Exception as e:
+                print(f"Error al generar trabajos: {e}")
+            finally:
+                self.job_semaphore.release()
 
     def block_template_updater(self):
         while not self.stop_event.is_set():
@@ -332,7 +345,7 @@ class StratumProcessing:
                 "method": "mining.notify",
                 "params": [job_id, job['prevhash'], job['coinbase1'], job['coinbase2'], job['merkle_branch'],
                            job['version'],
-                           job['nbits'], job['ntime'], clean_jobs]
+                           job['nbits'], ntime, clean_jobs]
             }
             miner_sock.sendall(json.dumps(local_notify).encode('utf-8') + b'\n')
             print(f"Local notify:\n{local_notify}")
