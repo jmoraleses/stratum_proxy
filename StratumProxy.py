@@ -669,7 +669,7 @@ def verify_block_header(block_header, target):
 
 def main():
     config = configparser.ConfigParser()
-    config.read('config_solo.ini')
+    config.read('config.ini')
 
     pool_address = f"stratum+tcp://{config['POOL']['host']}:{config['POOL']['port']}"
     miner_port = int(config['STRATUM']['port'])
