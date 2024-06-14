@@ -77,8 +77,8 @@ class StratumProxy:
                     time.sleep(1)
                     continue
                 if len(self.generated_jobs) == 0:
-                    print("No se generaron trabajos.")
-                    # time.sleep(1)
+                    # print("No se generaron trabajos.")
+                    time.sleep(1)
             except Exception as e:
                 print(f"Error al generar trabajos: {e}")
             finally:
@@ -204,7 +204,6 @@ class StratumProcessing:
         self.height = None
         self.prevhash = None
         self.nbits = None
-        self.fee = None
         self.target = None
         self.transactions_raw = None
         self.min_difficulty = int(config.get('DIFFICULTY', 'min'))  # Inicializar la dificultad sugerida

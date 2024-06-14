@@ -93,7 +93,7 @@ class StratumProxy:
         threading.Thread(target=self.merkle_root_counter, daemon=True).start()
         threading.Thread(target=self.job_generator, daemon=True).start()
         print("Creando trabajos, esperando...")
-        time.sleep(10)
+        # time.sleep(10)
         if self.connect_to_pool():
             self.wait_for_miners()
 
@@ -229,7 +229,6 @@ class StratumProcessing:
         self.height = None
         self.prevhash = None
         self.nbits = None
-        self.fee = None
         self.target = None
         self.transactions_raw = None
         self.min_difficulty = int(config.get('DIFFICULTY', 'min'))  # Inicializar la dificultad sugerida
@@ -374,7 +373,7 @@ class StratumProcessing:
         print(f"Procesando submit del minero, ntime: {ntime}:")
         print(f"extranonce2: {extranonce2}, ntime: {ntime}, nonce: {nonce}")
 
-        job = self.proxy.jobs.get(job_id)
+        job = self.proxy.jobs[job_id]
 
         if job is None:
             print("Job ID no encontrado.")
