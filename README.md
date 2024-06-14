@@ -3,8 +3,8 @@
 Stratum Pool is a cryptocurrency mining proxy that connects miners to a mining pool, managing difficulty and miner authorizations.
 
 
-## StratumPool
-`StratumPool` is a mining proxy designed for integration with mining pools. It connects to Bitcoin Core via RPC and aggregates multiple miner connections, managing job distribution, and collecting shares from miners. It optimizes mining pool operations for better organization and efficiency.
+## StratumProxy
+`StratumProxy` is a mining proxy designed for integration with mining pools. It connects to Bitcoin Core via RPC and aggregates multiple miner connections, managing job distribution, and collecting shares from miners. It optimizes mining pool operations for better organization and efficiency.
 
 ## Features
 
