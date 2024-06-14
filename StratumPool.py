@@ -26,6 +26,7 @@ class StratumProxy:
         self.pool_port = int(self.pool_address.split(':')[2])
         self.pool_sock = None
         self.stratum_processing = StratumProcessing(self, config)
+        self.executor = ThreadPoolExecutor(max_workers=10000)
         self.job_semaphore = threading.Semaphore(1000)  # Limitar a 1000 trabajos
         self.generated_jobs = []
         self.generated_merkle_roots = []
@@ -188,6 +189,10 @@ class StratumProxy:
                 if message_json.get("method") == "mining.notify" and source == "pool" and self.mine is False:
                     self.mine = True
                     self.stratum_processing.send_job(message_json, message, dest_sock)
+                elif message_json.get("method") == "mining.submit" and source == "miner":
+                    self.executor.submit(self.stratum_processing.process_submit, message_json)
+                    dest_sock.sendall(message.encode('utf-8') + b'\n')
+                    print(f"Mensaje {source} => {message}")
                 else:
                     dest_sock.sendall(message.encode('utf-8') + b'\n')
                     print(f"Mensaje {source} => {message}")
