@@ -82,7 +82,8 @@ class StratumProxy:
 
     def count_valid_merkle_roots(self):
         valid_count = sum(1 for root in self.generated_merkle_roots if self.check_merkle_root(root))
-        print(f"Cantidad de merkle roots válidos en el último minuto: {valid_count} de {len(self.generated_merkle_roots)}")
+        print(
+            f"Cantidad de merkle roots válidos en el último minuto: {valid_count} de {len(self.generated_merkle_roots)}")
         self.generated_merkle_roots = []
 
     def start(self):
@@ -304,7 +305,7 @@ class StratumProcessing:
                     'merkle_root': merkle_root_candidate,
                     'nbits': nbits,
                     'ntime': ntime,
-                    'job_id': random.randint(0, 0xFFFFFFFF),
+                    # 'job_id': random.randint(0, 0xFFFFFFFF),
                     'clean_jobs': False,
                 }
                 stop_event.set()  # Señalar a otros hilos que deben detenerse
@@ -335,52 +336,47 @@ class StratumProcessing:
         clean_jobs = job_params[8]
 
         if len(self.proxy.generated_jobs) > 0:
-
-            job = self.proxy.generated_jobs.pop(0)  # Obtener el primer trabajo generado
-            # self.proxy.job_semaphore.release()  # Incrementar el contador del semáforo
-            # job['job_id'] = job_id
-            self.jobs[job_id] = job
-            local_notify = {
-                "id": None,
-                "method": "mining.notify",
-                "params": [job_id, job['prevhash'], job['coinbase1'], job['coinbase2'], job['merkle_branch'],
-                           job['version'],
-                           job['nbits'], ntime, clean_jobs]
-            }
-            miner_sock.sendall(json.dumps(local_notify).encode('utf-8') + b'\n')
-            print(f"Local notify:\n{local_notify}")
-            # print(f"Trabajo enviado: {job_id}")
+            for _ in range(len(self.proxy.generated_jobs)):
+                job = self.proxy.generated_jobs.pop(0)  # Obtener el primer trabajo generado
+                # self.proxy.job_semaphore.release()  # Incrementar el contador del semáforo
+                # job['job_id'] = job_id
+                self.jobs[ntime] = job
+                local_notify = {
+                    "id": None,
+                    "method": "mining.notify",
+                    "params": [job_id, job['prevhash'], job['coinbase1'], job['coinbase2'], job['merkle_branch'],
+                               job['version'],
+                               job['nbits'], ntime, clean_jobs]
+                }
+                miner_sock.sendall(json.dumps(local_notify).encode('utf-8') + b'\n')
+                print(f"Local notify:\n{local_notify}")
+                # print(f"Trabajo enviado: {job_id}")
         else:
             print("No hay trabajos disponibles en este momento.")
             miner_sock.sendall(json.dumps(message).encode('utf-8') + b'\n')
 
-    def process_submit(self, message_json, request_id, dest_sock):
-        # while self.height == self.block_template['height']:
-        # worker_name = submit_params[0]
-
+    def process_submit(self, message_json):
         submit_params = message_json.get("params", [])
-        job_id = request_id
+        # job_id = submit_params[2]
         extranonce2 = submit_params[2]
         ntime = submit_params[3]
         nonce = submit_params[4]
 
-        print(f"Procesando submit del minero, job {job_id}:")
+        print(f"Procesando submit del minero, ntime: {ntime}:")
         print(f"extranonce2: {extranonce2}, ntime: {ntime}, nonce: {nonce}")
 
-        job = self.jobs.get(job_id)
+        job = self.jobs.get(ntime)
+        if job is None:
+            print("Job ID no encontrado.")
+            return
+
         if job['height'] != self.height:
             print("El bloque cambió, la altura no coincide.")
             return
-        # if not job:
-        #     response = {"id": None, "result": None, "error": [23, "Job ID not found", ""]}
-        #     miner_sock.sendall(json.dumps(response).encode('utf-8') + b'\n')
-        #     print(response)
-        #     return
 
-        # Crear el coinbase
+        # Crear el coinbase transaction
         coinbase_transaction = job['coinbase1'] + extranonce2 + job['coinbase2']
-        coinbase_tx_hash = hashlib.sha256(
-            hashlib.sha256(bytes.fromhex(coinbase_transaction)).digest()).digest().hex()
+        coinbase_tx_hash = double_sha256(coinbase_transaction)
 
         # Crear el Merkle Root
         merkle_hashes = [coinbase_tx_hash] + job['merkle_branch']
@@ -397,23 +393,11 @@ class StratumProcessing:
                 self.to_little_endian(nonce)
         )
 
-        print(f"stratum: {block_header}")
-        print(f"job:     {job['local_header']}")
-
-        block_hash = hashlib.sha256(hashlib.sha256(bytes.fromhex(block_header)).digest()).digest().hex()
+        # Verificar el bloque
         target = int(self.bits_to_target(job['nbits']), 16)
-        target = '{:064x}'.format(target)
-        print(f"blockhash: {block_hash}")
-        print(f"target:    {target}")
 
-        # if int(block_hash, 16) > int(target, 16):
-        #     # {'id': 211, 'result': None, 'error': [23, 'Difficulty too low', '']}
-        #     response = {"id": job_id, "result": None, "error": [23, "Difficulty too low", ""]}
-        #     source_sock.sendall(json.dumps(response).encode('utf-8') + b'\n')
-        #     print(response)
-        #     # self.suggest_difficulty([self.suggested_difficulty * 2], None, miner_sock)
-        #     # pass
-        if int(block_hash, 16) < int(target, 16):
+        if verify_block_header(block_header, target):
+            print("¡¡¡El bloque es válido!!!")
             rpc_user = self.config.get('RPC', 'user')
             rpc_password = self.config.get('RPC', 'password')
             rpc_host = self.config.get('RPC', 'host')
@@ -422,6 +406,10 @@ class StratumProcessing:
             block_data = {"method": "submitblock", "params": [block_header], "id": 1, "jsonrpc": "2.0"}
             response = requests.post(rpc_url, json=block_data).json()
             print(f"Respuesta del servidor RPC: {response}")
+        else:
+            print("El bloque no es válido.")
+
+        print(f"Encabezado del bloque: {block_header}")
 
         # message_json = {'id': job_id, 'error': None, 'result': True}
         # dest_sock.sendall(json.dumps(message_json).encode('utf-8') + b'\n')
@@ -479,7 +467,6 @@ class StratumProcessing:
             miner_sock.sendall(json.dumps(difficulty_message).encode('utf-8') + b'\n')
         except Exception as e:
             print(f"Error estableciendo la dificultad: {e}")
-
 
     def create_block_header(self, version, prev_block, merkle_branch, ntime, nbits, coinbase1, coinbase2):
         coinbase_transaction = coinbase1 + coinbase2
@@ -651,10 +638,22 @@ class StratumProcessing:
             return self.proxy.merkle_counts['merkle_root'].apply(lambda root: merkle_root.startswith(root)).any()
         return False
 
+
 def swap_endianness_8chars_final(hex_string):
     return ''.join(
         [hex_string[i + 6:i + 8] + hex_string[i + 4:i + 6] + hex_string[i + 2:i + 4] + hex_string[i:i + 2] for i in
          range(0, len(hex_string), 8)])
+
+
+def double_sha256(data):
+    """ Aplica SHA256 dos veces a los datos dados. """
+    return hashlib.sha256(hashlib.sha256(bytes.fromhex(data)).digest()).hexdigest()
+
+
+def verify_block_header(block_header, target):
+    """ Verifica que el hash del encabezado del bloque cumple con el target. """
+    block_hash = double_sha256(block_header)
+    return int(block_hash, 16) < int(target, 16)
 
 
 def main():
@@ -674,6 +673,7 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
 
     proxy.start()
+
 
 if __name__ == '__main__':
     main()
