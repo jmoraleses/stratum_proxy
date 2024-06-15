@@ -1,6 +1,6 @@
 # Stratum Proxy
 
-Stratum Pool is a cryptocurrency mining proxy that connects miners to a mining pool, managing difficulty and miner authorizations.
+Stratum Proxy is a cryptocurrency mining proxy that connects miners to a mining pool, managing difficulty and miner authorizations.
 
 
 ## StratumProxy
