@@ -309,6 +309,7 @@ class StratumProcessing:
                     'merkle_root': merkle_root_candidate,
                     'nbits': nbits,
                     'ntime': ntime,
+                    'height': self.height,
                     # 'job_id': random.randint(0, 0xFFFFFFFF),
                     'clean_jobs': False,
                 }
@@ -365,7 +366,7 @@ class StratumProcessing:
     def process_submit(self, message_json):
         print(message_json)
         submit_params = message_json["params"]
-        job_id = submit_params[2]
+        job_id = submit_params[1]
         extranonce2 = submit_params[2]
         ntime = submit_params[3]
         nonce = submit_params[4]

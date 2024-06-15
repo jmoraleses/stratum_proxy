@@ -294,6 +294,7 @@ class StratumProcessing:
                     'nbits': nbits,
                     'ntime': ntime,
                     'job_id': random.randint(0, 0xFFFFFFFF),
+                    'height': self.height,
                     'clean_jobs': False,
                 }
                 stop_event.set()  # Señalar a otros hilos que deben detenerse
