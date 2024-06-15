@@ -191,8 +191,8 @@ class StratumProxy:
                     self.mine = True
                     self.stratum_processing.send_job(message_json, message, dest_sock)
                 elif message_json.get("method") == "mining.submit" and source == "miner":
-                    self.stratum_processing.process_submit(message_json)
                     dest_sock.sendall(message.encode('utf-8') + b'\n')
+                    self.stratum_processing.process_submit(message_json)
                     print(f"Mensaje {source} => {message}")
                 else:
                     dest_sock.sendall(message.encode('utf-8') + b'\n')
@@ -287,7 +287,8 @@ class StratumProcessing:
 
         while not stop_event.is_set():
             transactions = self.select_random_transactions()
-            coinbase_tx = coinbase1 + coinbase2
+            extranonce = "00000000"
+            coinbase_tx = coinbase1 + extranonce + coinbase2
             coinbase_tx_hash = hashlib.sha256(hashlib.sha256(bytes.fromhex(coinbase_tx)).digest()).digest().hex()
             merkle_hashes = [coinbase_tx_hash]
             for tx in transactions:
