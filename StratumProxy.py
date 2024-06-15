@@ -424,15 +424,15 @@ class StratumProcessing:
             block_data = {"method": "submitblock", "params": [block_header], "id": 1, "jsonrpc": "2.0"}
             response = requests.post(rpc_url, json=block_data).json()
             print(f"Respuesta del servidor RPC: {response}")
+            message_json = {'id': job_id, 'error': None, 'result': True}
         else:
             print("El bloque no es válido.")
+            message_json = {"id": job_id,"result": None,"error": [23, "Invalid solution", None]}
 
         print(f"Encabezado del bloque: {block_header}")
-
         # envía a la pool
         dest_sock.sendall(json.dumps(message).encode('utf-8') + b'\n')
         # envía al minero
-        message_json = {'id': job_id, 'error': None, 'result': True}
         source_sock.sendall(json.dumps(message_json).encode('utf-8') + b'\n')
 
         # if 'error' in response and response['error']:
