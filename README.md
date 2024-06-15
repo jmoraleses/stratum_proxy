@@ -77,7 +77,7 @@ Stratum Pool is a cryptocurrency mining proxy that connects miners to a mining p
 
 To start the proxy, run:
 ```sh
-python3 StratumProxyPool.py
+python3 StratumProxy.py
 ```
 
 
