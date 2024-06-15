@@ -8,7 +8,6 @@ import select
 import socket
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 import signal
 import sys
 
@@ -26,7 +25,7 @@ class StratumProxy:
         self.pool_port = int(self.pool_address.split(':')[2])
         self.pool_sock = None
         self.stratum_processing = StratumProcessing(self, config)
-        self.executor = ThreadPoolExecutor(max_workers=10000)
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=10000)
         self.job_semaphore = threading.Semaphore(1000)  # Limitar a 1000 trabajos
         self.generated_jobs = []
         self.generated_merkle_roots = []
@@ -38,6 +37,9 @@ class StratumProxy:
         self.stop_event = threading.Event()
         self.mine = False
         self.jobs = {}
+        self.jobs_mining = 0
+        self.coinbase1 = None
+        self.coinbase2 = None
 
     def load_merkle_counts(self, file_path):
         try:
@@ -86,8 +88,9 @@ class StratumProxy:
     def count_valid_merkle_roots(self):
         valid_count = sum(1 for root in self.generated_merkle_roots if self.check_merkle_root(root))
         print(
-            f"Cantidad de merkle roots válidos en el último minuto: {valid_count} de {len(self.generated_merkle_roots)}")
+            f"{self.jobs_mining} de merkle roots válidos en el último minuto: {valid_count} de {len(self.generated_merkle_roots)}")
         self.generated_merkle_roots = []
+        self.jobs_mining = 0
 
     def start(self):
         threading.Thread(target=self.block_template_updater, daemon=True).start()
@@ -191,9 +194,11 @@ class StratumProxy:
                 if message_json.get("method") == "mining.notify" and source == "pool" and self.mine is False:
                     self.mine = True
                     self.stratum_processing.send_job(message_json, message, dest_sock)
+                elif "result" in message_json and source == "pool":
+                    self.stratum_processing.notify(message_json, dest_sock)
                 elif message_json.get("method") == "mining.submit" and source == "miner":
-                    dest_sock.sendall(message.encode('utf-8') + b'\n')
-                    self.stratum_processing.process_submit(message_json)
+                    # dest_sock.sendall(message.encode('utf-8') + b'\n')
+                    self.stratum_processing.process_submit(message_json, message, source_sock, dest_sock)
                     print(f"Mensaje {source} => {message}")
                 else:
                     dest_sock.sendall(message.encode('utf-8') + b'\n')
@@ -235,8 +240,7 @@ class StratumProcessing:
         self.min_difficulty = int(config.get('DIFFICULTY', 'min'))  # Inicializar la dificultad sugerida
         self.max_difficulty = int(config.get('DIFFICULTY', 'max'))  # Inicializar la dificultad sugerida
         self.first_job = False
-        self.coinbase1 = None
-        self.coinbase2 = None
+
 
     def generate_jobs(self):
         self.update_block_template()
@@ -245,7 +249,7 @@ class StratumProcessing:
             time.sleep(1)  # Esperar antes de intentar nuevamente
             return
 
-        if self.coinbase1 is None or self.coinbase2 is None:
+        if self.proxy.coinbase1 is None or self.proxy.coinbase2 is None:
             # print("Coinbase no encontrada, esperando...")
             # time.sleep(1)  # Esperar antes de intentar nuevamente
             return
@@ -257,7 +261,7 @@ class StratumProcessing:
         nbits = self.block_template['bits']
         ntime = self.to_little_endian(self.int2lehex(int(time.time()), 4))
 
-        jobs = self.create_job_from_blocktemplate(version, prevhash, self.coinbase1, self.coinbase2, nbits, ntime)
+        jobs = self.create_job_from_blocktemplate(version, prevhash, self.proxy.coinbase1, self.proxy.coinbase2, nbits, ntime)
         if jobs:
             self.proxy.generated_jobs.extend(jobs)  # Añadir trabajos generados a la lista
 
@@ -288,8 +292,8 @@ class StratumProcessing:
 
         while not stop_event.is_set():
             transactions = self.select_random_transactions()
-            extranonce = "00000000"
-            coinbase_tx = coinbase1 + extranonce + coinbase2
+            extranonce1 = "00000000"
+            coinbase_tx = coinbase1 + extranonce1 + coinbase2
             coinbase_tx_hash = hashlib.sha256(hashlib.sha256(bytes.fromhex(coinbase_tx)).digest()).digest().hex()
             merkle_hashes = [coinbase_tx_hash]
             for tx in transactions:
@@ -323,7 +327,7 @@ class StratumProcessing:
         stop_event = threading.Event()
         height = self.height
 
-        with ThreadPoolExecutor() as executor:
+        with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = [executor.submit(self.worker_job, self.proxy, version, prevhash,
                                        coinbase1, coinbase2, nbits, ntime, stop_event) for _ in range(100)]
             for future in concurrent.futures.as_completed(futures):
@@ -338,8 +342,8 @@ class StratumProcessing:
     def send_job(self, message_json, message, miner_sock):
         # job_id = str(uuid.uuid4().hex[:6])
         job_params = message_json["params"]
-        self.coinbase1 = str(job_params[2])
-        self.coinbase2 = str(job_params[3])
+        self.proxy.coinbase1 = str(job_params[2])
+        self.proxy.coinbase2 = str(job_params[3])
         job_id = str(job_params[0])
         ntime = job_params[7]
         clean_jobs = job_params[8]
@@ -354,18 +358,19 @@ class StratumProcessing:
             local_notify = {
                 "id": None,
                 "method": "mining.notify",
-                "params": [job_id, job['prevhash'], self.coinbase1, self.coinbase2, job['merkle_branch'],
+                "params": [job_id, job['prevhash'], self.proxy.coinbase1, self.proxy.coinbase2, job['merkle_branch'],
                            job['version'],
                            job['nbits'], ntime, clean_jobs]
             }
             miner_sock.sendall(json.dumps(local_notify).encode('utf-8') + b'\n')
             print(f"Local notify:\n{local_notify}")
             # print(f"Trabajo enviado: {job_id}")>
+            self.proxy.jobs_mining += 1
         else:
             print("No hay trabajos disponibles en este momento.")
             miner_sock.sendall(json.dumps(message).encode('utf-8') + b'\n')
 
-    def process_submit(self, message_json):
+    def process_submit(self, message_json, message, source_sock, dest_sock):
         print(message_json)
         submit_params = message_json["params"]
         job_id = submit_params[1]
@@ -387,7 +392,8 @@ class StratumProcessing:
             return
 
         # Crear el coinbase transaction
-        coinbase_transaction = job['coinbase1'] + extranonce2 + job['coinbase2']
+        extranonce1 = "00000000"
+        coinbase_transaction = job['coinbase1'] + extranonce1 + extranonce2 + job['coinbase2']
         coinbase_tx_hash = double_sha256(coinbase_transaction)
 
         # Crear el Merkle Root
@@ -423,8 +429,12 @@ class StratumProcessing:
 
         print(f"Encabezado del bloque: {block_header}")
 
-        # message_json = {'id': job_id, 'error': None, 'result': True}
-        # dest_sock.sendall(json.dumps(message_json).encode('utf-8') + b'\n')
+        # envía a la pool
+        dest_sock.sendall(json.dumps(message).encode('utf-8') + b'\n')
+        # envía al minero
+        message_json = {'id': job_id, 'error': None, 'result': True}
+        source_sock.sendall(json.dumps(message_json).encode('utf-8') + b'\n')
+
         # if 'error' in response and response['error']:
         #     error = response['error']
         #     response = {"id": None, "result": None, "error": error}
@@ -477,6 +487,17 @@ class StratumProcessing:
             print(f"Estableciendo dificultad a {difficulty}")
             difficulty_message = {"id": None, "method": "mining.set_difficulty", "params": [difficulty]}
             miner_sock.sendall(json.dumps(difficulty_message).encode('utf-8') + b'\n')
+        except Exception as e:
+            print(f"Error estableciendo la dificultad: {e}")
+
+    def notify(self, message_json, miner_sock):
+        try:
+            id = message_json["id"]
+            # extranonce1 = message_json["result"][0][0][1]
+            extranonce1 = "00000000"
+            notify_message = {"id": id, "error": None, "result": [[["mining.notify", extranonce1]], extranonce1, 4]}
+            miner_sock.sendall(json.dumps(notify_message).encode('utf-8') + b'\n')
+            print(notify_message)
         except Exception as e:
             print(f"Error estableciendo la dificultad: {e}")
 
@@ -596,7 +617,7 @@ class StratumProcessing:
 
     def select_random_transactions(self):
         transactions = self.block_template["transactions"]
-        min_transactions, max_transactions = 4, 13
+        min_transactions, max_transactions = 4, 11
         num_transactions = random.randint(min_transactions, max_transactions)
         selected_transactions = random.sample(transactions, num_transactions)
         return selected_transactions
