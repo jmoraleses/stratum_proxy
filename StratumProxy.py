@@ -73,7 +73,8 @@ class StratumProxy:
 
     def merkle_root_counter(self):
         time.sleep(60)
-        while not self.stop_event.is_set():
+        # while not self.stop_event.is_set():
+        while True:
             self.count_valid_merkle_roots()
             time.sleep(60)
 
@@ -324,7 +325,7 @@ class StratumProcessing:
 
         with ThreadPoolExecutor() as executor:
             futures = [executor.submit(self.worker_job, self.proxy, version, prevhash,
-                                       coinbase1, coinbase2, nbits, ntime, stop_event) for _ in range(1000)]
+                                       coinbase1, coinbase2, nbits, ntime, stop_event) for _ in range(100)]
             for future in concurrent.futures.as_completed(futures):
                 job = future.result()
                 if job is not None:
