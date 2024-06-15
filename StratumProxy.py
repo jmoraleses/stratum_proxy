@@ -404,7 +404,7 @@ class StratumProcessing:
         )
 
         # Verificar el bloque
-        target = int(self.bits_to_target(job['nbits']), 16)
+        target = self.bits_to_target(job['nbits'])
 
         if verify_block_header(block_header, target):
             print("¡¡¡El bloque es válido!!!")
