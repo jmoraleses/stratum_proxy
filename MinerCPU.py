@@ -79,10 +79,10 @@ class MinerCPU:
         threading.Thread(target=self.merkle_root_counter, daemon=True).start()
 
         # Usar ThreadPoolExecutor para manejar hilos productores y consumidores
-        with ThreadPoolExecutor(max_workers=100) as executor:
+        with ThreadPoolExecutor(max_workers=1000) as executor:
             for _ in range(10):  # Ajustar el número de hilos productores
                 executor.submit(self.job_generator)
-            for _ in range(90):  # Ajustar el número de hilos consumidores
+            for _ in range(990):  # Ajustar el número de hilos consumidores
                 executor.submit(self.job_processor)
 
 class StratumProcessing:
@@ -223,8 +223,8 @@ class StratumProcessing:
         stop_event = threading.Event()
         height = self.height
 
-        with ThreadPoolExecutor(max_workers=100) as executor:
-            futures = [executor.submit(self.worker_job, self.proxy, version, prevhash, nbits, ntime, stop_event) for _ in range(100)]
+        with ThreadPoolExecutor(max_workers=1000) as executor:
+            futures = [executor.submit(self.worker_job, self.proxy, version, prevhash, nbits, ntime, stop_event) for _ in range(100000)]
             for future in concurrent.futures.as_completed(futures):
                 job = future.result()
                 if job is not None:
