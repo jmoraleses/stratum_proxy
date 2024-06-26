@@ -1,20 +1,20 @@
-import concurrent
 import configparser
 import hashlib
+import logging
 import random
 import signal
 import struct
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
-from queue import Queue
-
+from multiprocessing import Process
 import pandas as pd
 import requests
-
 from BlockTemplate import BlockTemplate
 from DatabaseHandler import DatabaseHandler
+from sha256_opencl import sha256_pyopencl
+
+NUM_ZEROS = 15
 
 class MinerCPU:
     def __init__(self, config):
@@ -24,19 +24,20 @@ class MinerCPU:
         self.valid_merkle_count = 0
         self.merkle_counts_file = config.get('FILES', 'merkle_file')
         self.merkle_counts = self.load_merkle_counts(self.merkle_counts_file)
-        self.job_queue = Queue()
+        self.job_queue = []
         self.merkle_roots = []
 
     def block_template_updater(self):
         while True:
             self.stratum_processing.block_template_fetcher.fetch_template()
-            time.sleep(4)
+            time.sleep(2)
 
     def merkle_root_counter(self):
-        time.sleep(60)
+        wait = 10
+        time.sleep(wait)
         while True:
-            self.count_valid_merkle_roots()
-            time.sleep(60)
+            self.count_valid_merkle_roots(wait)
+            time.sleep(wait)
 
     def load_merkle_counts(self, file_path):
         try:
@@ -51,39 +52,54 @@ class MinerCPU:
             return self.merkle_counts['merkle_root'].apply(lambda root: merkle_root.startswith(root)).any()
         return False
 
-    def count_valid_merkle_roots(self):
-        valid_count = sum(1 for root in self.generated_merkle_roots if self.check_merkle_root(root))
-        valid_merkles = sum(1 for merkle in self.merkle_roots)
-        print(f"Cantidad de merkle roots válidos en el último minuto: {valid_merkles} de {len(self.generated_merkle_roots)}")
+    def count_valid_merkle_roots(self, wait):
+        # valid_count = sum(self.check_merkle_root(root) for root in self.generated_merkle_roots)
+
+        total_generated = len(self.generated_merkle_roots)
+
+        # Calcula el hashrate en hashes por segundo
+        hashrate_hps = (total_generated * 16 ** 8) / wait
+
+        # Convierte el hashrate a Petahashes por segundo (1 PH/s = 10**15 H/s)
+        hashrate_phps = hashrate_hps / 10 ** 12
+
+        print(f"merkle roots {len(self.merkle_roots)} de {total_generated} (Hashrate: {hashrate_phps:.5f} TH/s)")
+        # print(f"merkle roots válidos en {wait} segundos: {valid_count} de {total_generated} (Hashrate: {hashrate_phps:.5f} TH/s)")
         self.generated_merkle_roots = []
 
     def job_generator(self):
-        time.sleep(2)
+        time.sleep(3)
         while True:
-            jobs = self.stratum_processing.generate_jobs()
-            if jobs:
-                for job in jobs:
-                    self.job_queue.put(job)
+            try:
+                jobs = self.stratum_processing.generate_jobs()
+                if jobs:
+                    self.job_queue.extend(jobs)
+            except Exception as e:
+                logging.error(f"Error en job_generator: {e}")
+                time.sleep(1)
+
 
     def job_processor(self):
+        time.sleep(10)
         while True:
-            job = self.job_queue.get()
-            if job:
-                self.stratum_processing.process_job(job)
-                self.job_queue.task_done()
+            if self.job_queue:
+                job = self.job_queue.pop(0)
+                if job:
+                    # Procesar el diccionario directamente
+                    self.stratum_processing.process_job(job)
             else:
-                time.sleep(0.1)  # Evita el uso intensivo de la CPU cuando la cola está vacía
+                time.sleep(0.1)
 
     def start(self):
         threading.Thread(target=self.block_template_updater, daemon=True).start()
         threading.Thread(target=self.merkle_root_counter, daemon=True).start()
-
         # Usar ThreadPoolExecutor para manejar hilos productores y consumidores
-        with ThreadPoolExecutor(max_workers=1000) as executor:
-            for _ in range(10):  # Ajustar el número de hilos productores
-                executor.submit(self.job_generator)
-            for _ in range(990):  # Ajustar el número de hilos consumidores
-                executor.submit(self.job_processor)
+        threading.Thread(target=self.job_generator, daemon=True).start()
+        # with ThreadPoolExecutor(max_workers=5) as executor:
+        #     for _ in range(3):  # Ajustar el número de hilos productores
+        #         executor.submit(self.job_generator)
+        self.job_processor()
+
 
 class StratumProcessing:
     def __init__(self, config, proxy):
@@ -104,6 +120,7 @@ class StratumProcessing:
         self.transactions_raw = None
         self.jobs = {}
 
+
     def process_job(self, job):
         ntime = job['ntime']
         nbits = job['nbits']
@@ -122,38 +139,82 @@ class StratumProcessing:
                 len_nonce = 8 - len(nonce_df)
                 nonce_end = nonce_init + (16 ** len_nonce)
 
-                for nonce in range(nonce_init, nonce_end):
-                    nonce_hex = f"{nonce:08x}"
-                    block_header = version + prevhash + merkle_root + ntime + nbits + nonce_hex
-                    block_hash = hashlib.sha256(
-                        hashlib.sha256(bytes.fromhex(block_header)).digest()
-                    ).digest().hex()
-                    target = int(self.bits_to_target(job['nbits']), 16)
-                    target = '{:064x}'.format(target)
-                    if int(block_hash, 16) < int(target, 16):
-                        print(f"blockhash: {block_hash}")
+                # Generar todos los nonces posibles
+                nonces = [f"{nonce:08x}" for nonce in range(nonce_init, nonce_end)]
+
+                # Crear todos los headers posibles
+                headers = [
+                    version + prevhash + merkle_root + ntime + nbits + nonce
+                    for nonce in nonces
+                ]
+                # Calcular los hashes usando OpenCL
+                hashes = sha256_pyopencl(headers, num_zeros=NUM_ZEROS)
+                target = int(self.bits_to_target(job['nbits']), 16)
+
+                # Comprobar si algún hash cumple con el objetivo
+                for i in range(len(hashes)):
+                    hash_hex = hashes[i]['hash']
+                    print(hash_hex)
+                    if int(hash_hex, 16) < target:
+                        header = hashes[i]['data']
+                        print(f"blockhash: {hash_hex}")
                         try:
-                            response = self.block_template_fetcher.submit_block(block_header)
+                            response = self.block_template_fetcher.submit_block(header)
                             print(f"Respuesta del servidor RPC: {response}")
                         except requests.exceptions.RequestException as e:
                             print(f"Error al enviar el bloque: {e}")
 
-    def miner(self):
-        while True:
-            if self.proxy.generated_jobs:
-                futures = []
-                while self.proxy.generated_jobs:
-                    job = self.proxy.generated_jobs.pop(0)
-                    if job:
-                        futures.append(self.proxy.executor.submit(self.process_job, job))
 
-                for future in futures:
-                    try:
-                        future.result()  # Espera a que todas las tareas se completen
-                    except Exception as e:
-                        print(f"Error processing job: {e}")
-            else:
-                time.sleep(0.5)
+    # def process_job(self, job):
+    #     ntime = job['ntime']
+    #     nbits = job['nbits']
+    #     prevhash = job['prevhash']
+    #     version = job['version']
+    #     coinbase1 = job['coinbase1']
+    #     coinbase2 = job['coinbase2']
+    #     merkle_branch = job['merkle_branch']
+    #     merkle_root = job['merkle_root']
+    #
+    #     if merkle_root not in self.proxy.merkle_roots:
+    #         self.proxy.merkle_roots.append(merkle_root)
+    #         nonce_df = self.check_merkle_nonce(merkle_root)
+    #         if nonce_df is not None:
+    #             nonce_init = int(nonce_df.ljust(8, '0'), 16)
+    #             len_nonce = 8 - len(nonce_df)
+    #             nonce_end = nonce_init + (16 ** len_nonce)
+    #
+    #             for nonce in range(nonce_init, nonce_end):
+    #                 nonce_hex = f"{nonce:08x}"
+    #                 block_header = version + prevhash + merkle_root + ntime + nbits + nonce_hex
+    #                 block_hash = hashlib.sha256(
+    #                     hashlib.sha256(bytes.fromhex(block_header)).digest()
+    #                 ).digest().hex()
+    #                 target = int(self.bits_to_target(job['nbits']), 16)
+    #                 target = '{:064x}'.format(target)
+    #                 if int(block_hash, 16) < int(target, 16):
+    #                     print(f"blockhash: {block_hash}")
+    #                     try:
+    #                         response = self.block_template_fetcher.submit_block(block_header)
+    #                         print(f"Respuesta del servidor RPC: {response}")
+    #                     except requests.exceptions.RequestException as e:
+    #                         print(f"Error al enviar el bloque: {e}")
+
+    # def miner(self):
+    #     while True:
+    #         if self.proxy.generated_jobs:
+    #             futures = []
+    #             while self.proxy.generated_jobs:
+    #                 job = self.proxy.generated_jobs.pop(0)
+    #                 if job:
+    #                     futures.append(self.proxy.executor.submit(self.process_job, job))
+    #
+    #             for future in futures:
+    #                 try:
+    #                     future.result()  # Espera a que todas las tareas se completen
+    #                 except Exception as e:
+    #                     print(f"Error processing job: {e}")
+    #         else:
+    #             time.sleep(0.5)
 
     def check_merkle_nonce(self, merkle_root):
         match = self.proxy.merkle_counts[self.proxy.merkle_counts['merkle_root'].apply(lambda x: merkle_root.startswith(x))]
@@ -164,10 +225,10 @@ class StratumProcessing:
 
     def generate_jobs(self):
         self.update_block_template()
-        if self.block_template is None:
-            print("Plantilla de bloque no disponible. Esperando antes de intentar nuevamente...")
-            time.sleep(1)  # Esperar antes de intentar nuevamente
-            return
+        # if self.block_template is None:
+        #     print("Plantilla de bloque no disponible. Esperando antes de intentar nuevamente...")
+        #     time.sleep(1)  # Esperar antes de intentar nuevamente
+        #     return
 
         prevhash = self.to_little_endian(swap_endianness_8chars_final(self.block_template['previousblockhash']))
 
@@ -186,8 +247,10 @@ class StratumProcessing:
             self.proxy.merkle_roots = []
         self.height = self.block_template['height']
 
-    def worker_job(self, proxy, version, prev_block, nbits, ntime, stop_event):
-        while True:
+    def worker_job(self, proxy, version, prev_block, nbits, ntime):
+        # while True:
+        jobs = []
+        for i in range(1000):
             self.transactions = self.select_random_transactions()
             extranonce_placeholder = "00000000"
             miner_message = self.miner_message()
@@ -216,22 +279,28 @@ class StratumProcessing:
                 'ntime': ntime,
                 'height': self.height,
             }
-            return job
+            jobs.append(job)
+        return jobs
 
     def create_job_from_blocktemplate(self, version, prevhash, nbits, ntime):
         valid_jobs = []
-        stop_event = threading.Event()
-        height = self.height
+        # stop_event = threading.Event()
+        # height = self.height
 
-        with ThreadPoolExecutor(max_workers=1000) as executor:
-            futures = [executor.submit(self.worker_job, self.proxy, version, prevhash, nbits, ntime, stop_event) for _ in range(100000)]
-            for future in concurrent.futures.as_completed(futures):
-                job = future.result()
-                if job is not None:
-                    valid_jobs.append(job)
-                    break
-        if height != self.block_template['height']:
-            return None
+        # with ThreadPoolExecutor(max_workers=100) as executor:
+        #     futures = [executor.submit(self.worker_job, self.proxy, version, prevhash, nbits, ntime) for _ in range(10000)]
+        #     for future in concurrent.futures.as_completed(futures):
+        #         job = future.result()
+        #         if job is not None:
+        #             valid_jobs.append(job)
+        #             break
+        jobs = self.worker_job(self.proxy, version, prevhash, nbits, ntime)
+        if jobs is not None:
+            valid_jobs.extend(jobs)
+            # for job in jobs:
+            #     valid_jobs.append(job)
+        # if height != self.block_template['height']:
+        #     return None
         return valid_jobs
 
     def compute_merkle_branch(self, merkle):
@@ -380,9 +449,9 @@ def swap_endianness_8chars_final(hex_string):
         [hex_string[i + 6:i + 8] + hex_string[i + 4:i + 6] + hex_string[i + 2:i + 4] + hex_string[i:i + 2] for i in
          range(0, len(hex_string), 8)])
 
-def main():
+def start_miner(config_path):
     config = configparser.ConfigParser()
-    config.read('config.ini')
+    config.read(config_path)
     miner_cpu = MinerCPU(config)
     miner_cpu.start()
 
@@ -392,6 +461,21 @@ def main():
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+
+def main():
+    config_path = 'config.ini'
+    num_processes = 1  # Número de procesos que deseas ejecutar
+
+    processes = []
+
+    for _ in range(num_processes):
+        p = Process(target=start_miner, args=(config_path,))
+        p.start()
+        processes.append(p)
+
+    # Esperar a que todos los procesos terminen
+    for p in processes:
+        p.join()
 
 if __name__ == '__main__':
     main()
