@@ -7,6 +7,7 @@ import struct
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Process
 import pandas as pd
 import requests
@@ -68,7 +69,6 @@ class MinerCPU:
         self.generated_merkle_roots = []
 
     def job_generator(self):
-        time.sleep(3)
         while True:
             try:
                 jobs = self.stratum_processing.generate_jobs()
@@ -93,11 +93,14 @@ class MinerCPU:
     def start(self):
         threading.Thread(target=self.block_template_updater, daemon=True).start()
         threading.Thread(target=self.merkle_root_counter, daemon=True).start()
-        # Usar ThreadPoolExecutor para manejar hilos productores y consumidores
+        time.sleep(3)
         threading.Thread(target=self.job_generator, daemon=True).start()
-        # with ThreadPoolExecutor(max_workers=5) as executor:
-        #     for _ in range(3):  # Ajustar el número de hilos productores
+        # with ThreadPoolExecutor(max_workers=100) as executor:
+        #     for _ in range(100):  # Ajustar el número de hilos productores
         #         executor.submit(self.job_generator)
+        # with ThreadPoolExecutor(max_workers=100) as executor:
+        #     for _ in range(100):  # Ajustar el número de hilos productores
+        #         executor.submit(self.job_processor)
         self.job_processor()
 
 
@@ -199,22 +202,6 @@ class StratumProcessing:
     #                     except requests.exceptions.RequestException as e:
     #                         print(f"Error al enviar el bloque: {e}")
 
-    # def miner(self):
-    #     while True:
-    #         if self.proxy.generated_jobs:
-    #             futures = []
-    #             while self.proxy.generated_jobs:
-    #                 job = self.proxy.generated_jobs.pop(0)
-    #                 if job:
-    #                     futures.append(self.proxy.executor.submit(self.process_job, job))
-    #
-    #             for future in futures:
-    #                 try:
-    #                     future.result()  # Espera a que todas las tareas se completen
-    #                 except Exception as e:
-    #                     print(f"Error processing job: {e}")
-    #         else:
-    #             time.sleep(0.5)
 
     def check_merkle_nonce(self, merkle_root):
         match = self.proxy.merkle_counts[self.proxy.merkle_counts['merkle_root'].apply(lambda x: merkle_root.startswith(x))]
