@@ -66,7 +66,7 @@ class MinerCPU:
 
         print(f"merkle roots {len(self.merkle_roots)} de {total_generated} (Hashrate: {hashrate_phps:.5f} TH/s)")
         # print(f"merkle roots válidos en {wait} segundos: {valid_count} de {total_generated} (Hashrate: {hashrate_phps:.5f} TH/s)")
-        self.generated_merkle_roots = []
+        # self.generated_merkle_roots = []
 
     def job_generator(self):
         while True:
@@ -98,9 +98,9 @@ class MinerCPU:
         # with ThreadPoolExecutor(max_workers=100) as executor:
         #     for _ in range(100):  # Ajustar el número de hilos productores
         #         executor.submit(self.job_generator)
-        # with ThreadPoolExecutor(max_workers=100) as executor:
-        #     for _ in range(100):  # Ajustar el número de hilos productores
-        #         executor.submit(self.job_processor)
+        with ThreadPoolExecutor(max_workers=100) as executor:
+            for _ in range(100):  # Ajustar el número de hilos productores
+                executor.submit(self.job_processor)
         self.job_processor()
 
 
@@ -124,50 +124,6 @@ class StratumProcessing:
         self.jobs = {}
 
 
-    def process_job(self, job):
-        ntime = job['ntime']
-        nbits = job['nbits']
-        prevhash = job['prevhash']
-        version = job['version']
-        coinbase1 = job['coinbase1']
-        coinbase2 = job['coinbase2']
-        merkle_branch = job['merkle_branch']
-        merkle_root = job['merkle_root']
-
-        if merkle_root not in self.proxy.merkle_roots:
-            self.proxy.merkle_roots.append(merkle_root)
-            nonce_df = self.check_merkle_nonce(merkle_root)
-            if nonce_df is not None:
-                nonce_init = int(nonce_df.ljust(8, '0'), 16)
-                len_nonce = 8 - len(nonce_df)
-                nonce_end = nonce_init + (16 ** len_nonce)
-
-                # Generar todos los nonces posibles
-                nonces = [f"{nonce:08x}" for nonce in range(nonce_init, nonce_end)]
-
-                # Crear todos los headers posibles
-                headers = [
-                    version + prevhash + merkle_root + ntime + nbits + nonce
-                    for nonce in nonces
-                ]
-                # Calcular los hashes usando OpenCL
-                hashes = sha256_pyopencl(headers, num_zeros=NUM_ZEROS)
-                target = int(self.bits_to_target(job['nbits']), 16)
-
-                # Comprobar si algún hash cumple con el objetivo
-                for i in range(len(hashes)):
-                    hash_hex = hashes[i]['hash']
-                    print(hash_hex)
-                    if int(hash_hex, 16) < target:
-                        header = hashes[i]['data']
-                        print(f"blockhash: {hash_hex}")
-                        try:
-                            response = self.block_template_fetcher.submit_block(header)
-                            print(f"Respuesta del servidor RPC: {response}")
-                        except requests.exceptions.RequestException as e:
-                            print(f"Error al enviar el bloque: {e}")
-
-
     # def process_job(self, job):
     #     ntime = job['ntime']
     #     nbits = job['nbits']
@@ -186,29 +142,76 @@ class StratumProcessing:
     #             len_nonce = 8 - len(nonce_df)
     #             nonce_end = nonce_init + (16 ** len_nonce)
     #
-    #             for nonce in range(nonce_init, nonce_end):
-    #                 nonce_hex = f"{nonce:08x}"
-    #                 block_header = version + prevhash + merkle_root + ntime + nbits + nonce_hex
-    #                 block_hash = hashlib.sha256(
-    #                     hashlib.sha256(bytes.fromhex(block_header)).digest()
-    #                 ).digest().hex()
-    #                 target = int(self.bits_to_target(job['nbits']), 16)
-    #                 target = '{:064x}'.format(target)
-    #                 if int(block_hash, 16) < int(target, 16):
-    #                     print(f"blockhash: {block_hash}")
+    #             # Generar todos los nonces posibles
+    #             nonces = [f"{nonce:08x}" for nonce in range(nonce_init, nonce_end)]
+    #
+    #             # Crear todos los headers posibles
+    #             headers = [
+    #                 version + prevhash + merkle_root + ntime + nbits + nonce
+    #                 for nonce in nonces
+    #             ]
+    #             # Calcular los hashes usando OpenCL
+    #             hashes = sha256_pyopencl(headers, num_zeros=NUM_ZEROS)
+    #             target = int(self.bits_to_target(job['nbits']), 16)
+    #
+    #             # Comprobar si algún hash cumple con el objetivo
+    #             for i in range(len(hashes)):
+    #                 hash_hex = hashes[i]['hash']
+    #                 print(hash_hex)
+    #                 if int(hash_hex, 16) < target:
+    #                     header = hashes[i]['data']
+    #                     print(f"blockhash: {hash_hex}")
     #                     try:
-    #                         response = self.block_template_fetcher.submit_block(block_header)
+    #                         response = self.block_template_fetcher.submit_block(header)
     #                         print(f"Respuesta del servidor RPC: {response}")
     #                     except requests.exceptions.RequestException as e:
     #                         print(f"Error al enviar el bloque: {e}")
 
 
+    def process_job(self, job):
+        ntime = job['ntime']
+        nbits = job['nbits']
+        prevhash = job['prevhash']
+        version = job['version']
+        coinbase1 = job['coinbase1']
+        coinbase2 = job['coinbase2']
+        merkle_branch = job['merkle_branch']
+        merkle_root = job['merkle_root']
+
+        if merkle_root not in self.proxy.merkle_roots:
+            self.proxy.merkle_roots.append(merkle_root)
+            nonce_df = self.check_merkle_nonce(merkle_root)
+            if nonce_df is not None:
+                nonce_init = int(nonce_df.ljust(8, '0'), 16)
+                len_nonce = 8 - len(nonce_df)
+                nonce_end = nonce_init + (16 ** len_nonce)
+
+                for nonce in range(nonce_init, nonce_end):
+                    nonce_hex = f"{nonce:08x}"
+                    block_header = version + prevhash + merkle_root + ntime + nbits + nonce_hex
+                    block_hash = hashlib.sha256(
+                        hashlib.sha256(bytes.fromhex(block_header)).digest()
+                    ).digest().hex()
+                    target = int(self.bits_to_target(job['nbits']), 16)
+                    target = '{:064x}'.format(target)
+                    if int(block_hash, 16) < int(target, 16):
+                        print(f"blockhash: {block_hash}")
+                        try:
+                            response = self.block_template_fetcher.submit_block(block_header)
+                            print(f"Respuesta del servidor RPC: {response}")
+                        except requests.exceptions.RequestException as e:
+                            print(f"Error al enviar el bloque: {e}")
+
     def check_merkle_nonce(self, merkle_root):
-        match = self.proxy.merkle_counts[self.proxy.merkle_counts['merkle_root'].apply(lambda x: merkle_root.startswith(x))]
-        if not match.empty:
-            row = match.iloc[0]  # Obtener la primera coincidencia
-            return row['nonce']
-        return None
+        # Filtrar todas las coincidencias donde el 'merkle_root' dado está al inicio de los valores en la columna 'merkle_root'
+        matches = self.proxy.merkle_counts[
+            self.proxy.merkle_counts['merkle_root'].apply(lambda x: merkle_root.startswith(x))]
+
+        if not matches.empty:
+            # Obtener todos los valores de 'nonce' como una lista
+            nonces = matches['nonce'].tolist()
+            return nonces
+        return []
 
     def generate_jobs(self):
         self.update_block_template()
@@ -218,11 +221,9 @@ class StratumProcessing:
         #     return
 
         prevhash = self.to_little_endian(swap_endianness_8chars_final(self.block_template['previousblockhash']))
-
         version = self.version_to_hex(self.block_template['version'])
         nbits = self.block_template['bits']
         ntime = self.to_little_endian(self.int2lehex(int(time.time()), 4))
-
         jobs = self.create_job_from_blocktemplate(version, prevhash, nbits, ntime)
         return jobs
 
@@ -230,8 +231,8 @@ class StratumProcessing:
         template = self.block_template_fetcher.get_template()
         self.block_template = template
         if self.height != self.block_template['height']:
-            self.proxy.generated_jobs = []
             self.proxy.merkle_roots = []
+            self.proxy.job_queue = []
         self.height = self.block_template['height']
 
     def worker_job(self, proxy, version, prev_block, nbits, ntime):
@@ -253,20 +254,21 @@ class StratumProcessing:
                     raise ValueError("Cada transacción debe contener 'hash' y 'data'")
             merkle_branch = self.compute_merkle_branch(merkle_hashes)
             merkle_root_candidate = self.compute_merkle_root(merkle_hashes)
-            proxy.generated_merkle_roots.append(merkle_root_candidate)
 
-            job = {
-                'version': self.to_little_endian(version),
-                'prevhash': prev_block,
-                'coinbase1': coinbase1,
-                'coinbase2': coinbase2,
-                'merkle_branch': merkle_branch,
-                'merkle_root': self.to_little_endian(merkle_root_candidate),
-                'nbits': nbits,
-                'ntime': ntime,
-                'height': self.height,
-            }
-            jobs.append(job)
+            if self.check_merkle_root(merkle_root_candidate):
+                proxy.generated_merkle_roots.append(merkle_root_candidate)
+                job = {
+                    'version': self.to_little_endian(version),
+                    'prevhash': prev_block,
+                    'coinbase1': coinbase1,
+                    'coinbase2': coinbase2,
+                    'merkle_branch': merkle_branch,
+                    'merkle_root': self.to_little_endian(merkle_root_candidate),
+                    'nbits': nbits,
+                    'ntime': ntime,
+                    'height': self.height,
+                }
+                jobs.append(job)
         return jobs
 
     def create_job_from_blocktemplate(self, version, prevhash, nbits, ntime):
