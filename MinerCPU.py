@@ -17,6 +17,7 @@ from sha256_opencl import sha256_pyopencl
 
 NUM_ZEROS = 15
 
+
 class MinerCPU:
     def __init__(self, config):
         self.db_handler = DatabaseHandler(config.get('DATABASE', 'db_file')).create_table()
@@ -27,6 +28,7 @@ class MinerCPU:
         self.merkle_counts = self.load_merkle_counts(self.merkle_counts_file)
         self.job_queue = []
         self.merkle_roots = []
+        self.merkle_roots_done = []
 
     def block_template_updater(self):
         while True:
@@ -64,9 +66,12 @@ class MinerCPU:
         # Convierte el hashrate a Petahashes por segundo (1 PH/s = 10**15 H/s)
         hashrate_phps = hashrate_hps / 10 ** 12
 
-        print(f"merkle roots {len(self.merkle_roots)} de {total_generated} (Hashrate: {hashrate_phps:.5f} TH/s)")
+        print(
+            f"merkle roots {len(self.merkle_roots_done)}:{len(self.merkle_roots)} de {total_generated} (Hashrate: {hashrate_phps:.5f} TH/s)")
         # print(f"merkle roots válidos en {wait} segundos: {valid_count} de {total_generated} (Hashrate: {hashrate_phps:.5f} TH/s)")
-        # self.generated_merkle_roots = []
+        self.generated_merkle_roots = []
+        self.merkle_roots = []
+        self.merkle_roots_done = []
 
     def job_generator(self):
         while True:
@@ -78,7 +83,6 @@ class MinerCPU:
                 logging.error(f"Error en job_generator: {e}")
                 time.sleep(1)
 
-
     def job_processor(self):
         time.sleep(10)
         while True:
@@ -86,7 +90,7 @@ class MinerCPU:
                 job = self.job_queue.pop(0)
                 if job:
                     # Procesar el diccionario directamente
-                    self.stratum_processing.process_job(job)
+                    self.stratum_processing.process_job_opencl(job)
             else:
                 time.sleep(0.1)
 
@@ -96,11 +100,11 @@ class MinerCPU:
         time.sleep(3)
         threading.Thread(target=self.job_generator, daemon=True).start()
         # with ThreadPoolExecutor(max_workers=100) as executor:
-        #     for _ in range(100):  # Ajustar el número de hilos productores
+        #     for _ in range(1000):  # Ajustar el número de hilos productores
         #         executor.submit(self.job_generator)
-        with ThreadPoolExecutor(max_workers=100) as executor:
-            for _ in range(100):  # Ajustar el número de hilos productores
-                executor.submit(self.job_processor)
+        # with ThreadPoolExecutor(max_workers=100) as executor:
+        #     for _ in range(100):  # Ajustar el número de hilos productores
+        #         executor.submit(self.job_processor)
         self.job_processor()
 
 
@@ -123,52 +127,8 @@ class StratumProcessing:
         self.transactions_raw = None
         self.jobs = {}
 
+    def process_job_opencl(self, job):
 
-    # def process_job(self, job):
-    #     ntime = job['ntime']
-    #     nbits = job['nbits']
-    #     prevhash = job['prevhash']
-    #     version = job['version']
-    #     coinbase1 = job['coinbase1']
-    #     coinbase2 = job['coinbase2']
-    #     merkle_branch = job['merkle_branch']
-    #     merkle_root = job['merkle_root']
-    #
-    #     if merkle_root not in self.proxy.merkle_roots:
-    #         self.proxy.merkle_roots.append(merkle_root)
-    #         nonce_df = self.check_merkle_nonce(merkle_root)
-    #         if nonce_df is not None:
-    #             nonce_init = int(nonce_df.ljust(8, '0'), 16)
-    #             len_nonce = 8 - len(nonce_df)
-    #             nonce_end = nonce_init + (16 ** len_nonce)
-    #
-    #             # Generar todos los nonces posibles
-    #             nonces = [f"{nonce:08x}" for nonce in range(nonce_init, nonce_end)]
-    #
-    #             # Crear todos los headers posibles
-    #             headers = [
-    #                 version + prevhash + merkle_root + ntime + nbits + nonce
-    #                 for nonce in nonces
-    #             ]
-    #             # Calcular los hashes usando OpenCL
-    #             hashes = sha256_pyopencl(headers, num_zeros=NUM_ZEROS)
-    #             target = int(self.bits_to_target(job['nbits']), 16)
-    #
-    #             # Comprobar si algún hash cumple con el objetivo
-    #             for i in range(len(hashes)):
-    #                 hash_hex = hashes[i]['hash']
-    #                 print(hash_hex)
-    #                 if int(hash_hex, 16) < target:
-    #                     header = hashes[i]['data']
-    #                     print(f"blockhash: {hash_hex}")
-    #                     try:
-    #                         response = self.block_template_fetcher.submit_block(header)
-    #                         print(f"Respuesta del servidor RPC: {response}")
-    #                     except requests.exceptions.RequestException as e:
-    #                         print(f"Error al enviar el bloque: {e}")
-
-
-    def process_job(self, job):
         ntime = job['ntime']
         nbits = job['nbits']
         prevhash = job['prevhash']
@@ -178,29 +138,77 @@ class StratumProcessing:
         merkle_branch = job['merkle_branch']
         merkle_root = job['merkle_root']
 
-        if merkle_root not in self.proxy.merkle_roots:
-            self.proxy.merkle_roots.append(merkle_root)
-            nonce_df = self.check_merkle_nonce(merkle_root)
-            if nonce_df is not None:
-                nonce_init = int(nonce_df.ljust(8, '0'), 16)
-                len_nonce = 8 - len(nonce_df)
+        # if merkle_root not in self.proxy.merkle_roots:
+        nonce_df = self.check_merkle_nonce(merkle_root)
+        if nonce_df is not None:
+            self.proxy.merkle_roots_done.append(merkle_root)
+            for nonce_one in nonce_df:
+
+                nonce_init = int(nonce_one.ljust(8, '0'), 16)
+                len_nonce = 8 - len(nonce_one)
                 nonce_end = nonce_init + (16 ** len_nonce)
 
-                for nonce in range(nonce_init, nonce_end):
-                    nonce_hex = f"{nonce:08x}"
-                    block_header = version + prevhash + merkle_root + ntime + nbits + nonce_hex
-                    block_hash = hashlib.sha256(
-                        hashlib.sha256(bytes.fromhex(block_header)).digest()
-                    ).digest().hex()
-                    target = int(self.bits_to_target(job['nbits']), 16)
-                    target = '{:064x}'.format(target)
-                    if int(block_hash, 16) < int(target, 16):
-                        print(f"blockhash: {block_hash}")
+                # Generar todos los nonces posibles
+                nonces = [f"{nonce:08x}" for nonce in range(nonce_init, nonce_end)]
+
+                # Crear todos los headers posibles
+                headers = [
+                    version + prevhash + merkle_root + ntime + nbits + nonce
+                    for nonce in nonces
+                ]
+                # Calcular los hashes usando OpenCL
+                hashes = sha256_pyopencl(headers, num_zeros=NUM_ZEROS)
+                target = int(self.bits_to_target(job['nbits']), 16)
+
+                # Comprobar si algún hash cumple con el objetivo
+                for i in range(len(hashes)):
+                    hash_hex = hashes[i]['hash']
+                    print(hash_hex)
+                    if int(hash_hex, 16) < target:
+                        header = hashes[i]['data']
+                        print(f"blockhash: {hash_hex}")
                         try:
-                            response = self.block_template_fetcher.submit_block(block_header)
+                            response = self.block_template_fetcher.submit_block(header)
                             print(f"Respuesta del servidor RPC: {response}")
                         except requests.exceptions.RequestException as e:
                             print(f"Error al enviar el bloque: {e}")
+
+    # def process_job_cpu(self, job):
+    #     ntime = job['ntime']
+    #     nbits = job['nbits']
+    #     prevhash = job['prevhash']
+    #     version = job['version']
+    #     coinbase1 = job['coinbase1']
+    #     coinbase2 = job['coinbase2']
+    #     merkle_branch = job['merkle_branch']
+    #     merkle_root = job['merkle_root']
+    #
+    #     # self.proxy.merkle_roots.append(merkle_root)
+    #     nonce_df = self.check_merkle_nonce(merkle_root)
+    #     if nonce_df is not None:
+    #         self.proxy.merkle_roots_done.append(merkle_root)
+    #         for nonce_one in nonce_df:
+    #
+    #
+    #             nonce_init = int(nonce_one.ljust(8, '0'), 16)
+    #             len_nonce = 8 - len(nonce_df)
+    #             nonce_end = nonce_init + (16 ** len_nonce)
+    #
+    #             for nonce in range(nonce_init, nonce_end):
+    #                 nonce_hex = f"{nonce:08x}"
+    #                 block_header = version + prevhash + merkle_root + ntime + nbits + nonce_hex
+    #                 block_hash = hashlib.sha256(
+    #                     hashlib.sha256(bytes.fromhex(block_header)).digest()
+    #                 ).digest().hex()
+    #                 target = int(self.bits_to_target(job['nbits']), 16)
+    #                 target = '{:064x}'.format(target)
+    #                 if int(block_hash, 16) < int(target, 16):
+    #                     print(f"blockhash: {block_hash}")
+    #                     try:
+    #                         response = self.block_template_fetcher.submit_block(block_header)
+    #                         print(f"Respuesta del servidor RPC: {response}")
+    #                     except requests.exceptions.RequestException as e:
+    #                         print(f"Error al enviar el bloque: {e}")
 
     def check_merkle_nonce(self, merkle_root):
         # Filtrar todas las coincidencias donde el 'merkle_root' dado está al inicio de los valores en la columna 'merkle_root'
@@ -215,11 +223,6 @@ class StratumProcessing:
 
     def generate_jobs(self):
         self.update_block_template()
-        # if self.block_template is None:
-        #     print("Plantilla de bloque no disponible. Esperando antes de intentar nuevamente...")
-        #     time.sleep(1)  # Esperar antes de intentar nuevamente
-        #     return
-
         prevhash = self.to_little_endian(swap_endianness_8chars_final(self.block_template['previousblockhash']))
         version = self.version_to_hex(self.block_template['version'])
         nbits = self.block_template['bits']
@@ -254,9 +257,10 @@ class StratumProcessing:
                     raise ValueError("Cada transacción debe contener 'hash' y 'data'")
             merkle_branch = self.compute_merkle_branch(merkle_hashes)
             merkle_root_candidate = self.compute_merkle_root(merkle_hashes)
-
+            proxy.generated_merkle_roots.append(merkle_root_candidate)
             if self.check_merkle_root(merkle_root_candidate):
-                proxy.generated_merkle_roots.append(merkle_root_candidate)
+                proxy.merkle_roots.append(merkle_root_candidate)
+
                 job = {
                     'version': self.to_little_endian(version),
                     'prevhash': prev_block,
@@ -433,10 +437,12 @@ class StratumProcessing:
             return self.proxy.merkle_counts['merkle_root'].apply(lambda root: merkle_root.startswith(root)).any()
         return False
 
+
 def swap_endianness_8chars_final(hex_string):
     return ''.join(
         [hex_string[i + 6:i + 8] + hex_string[i + 4:i + 6] + hex_string[i + 2:i + 4] + hex_string[i:i + 2] for i in
          range(0, len(hex_string), 8)])
+
 
 def start_miner(config_path):
     config = configparser.ConfigParser()
@@ -450,6 +456,7 @@ def start_miner(config_path):
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+
 
 def main():
     config_path = 'config.ini'
@@ -465,6 +472,7 @@ def main():
     # Esperar a que todos los procesos terminen
     for p in processes:
         p.join()
+
 
 if __name__ == '__main__':
     main()
