@@ -100,21 +100,21 @@ class MinerCPU:
 
         time.sleep(3)
 
-        num_generators = 4
+        num_generators = 2
         generator_processes = [
             multiprocessing.Process(target=self.job_generator, args=(self.job_queue, self.generated_merkle_roots, self.merkle_roots))
             for _ in range(num_generators)
         ]
 
-        for process in generator_processes:
-            process.start()
+        for process_g in generator_processes:
+            process_g.start()
 
         try:
             self.job_processor()
         finally:
-            for process in generator_processes:
-                process.terminate()
-                process.join()
+            for process_g in generator_processes:
+                process_g.terminate()
+                process_g.join()
             for process_c in counter_processes:
                 process_c.terminate()
                 process_c.join()
