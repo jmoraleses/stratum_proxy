@@ -59,7 +59,7 @@ class MinerCPU:
         hashrate_hps = (total_generated * (16 ** 8)) / wait
         hashrate_phps = hashrate_hps / 10 ** 12
 
-        print(f"merkle roots {len(self.merkle_roots_done)}:{len(merkle_roots)} de {total_generated} (Hashrate: {hashrate_phps:.5f} TH/s)")
+        print(f"merkle roots {len(self.merkle_roots_done)}:{len(merkle_roots)} válidos de {total_generated} totales (Hashrate: {hashrate_phps:.5f} TH/s)")
         self.generated_merkle_roots[:] = []
         self.merkle_roots[:] = []
         self.merkle_roots_done[:] = []
@@ -95,7 +95,7 @@ class MinerCPU:
 
         time.sleep(3)
 
-        num_generators = 2
+        num_generators = 4
         generator_processes = [
             multiprocessing.Process(target=self.job_generator, args=(self.job_queue, self.generated_merkle_roots, self.merkle_roots))
             for _ in range(num_generators)

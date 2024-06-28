@@ -1,61 +1,36 @@
+import time
 import requests
 import json
 
-
 class BlockTemplate:
     def __init__(self, config):
-        rpc_host = config.get('RPC', 'host')
-        rpc_port = config.get('RPC', 'port')
-        self.rpc_url = f"http://{rpc_host}:{rpc_port}"
-        self.rpc_user = config.get('RPC', 'user')
-        self.rpc_password = config.get('RPC', 'password')
+        self.api_url = config.get('API', 'url')
         self.template = None
         self.submission_response = None
 
-        print(f"Initialized BlockTemplate with URL: {self.rpc_url}")
+        print(f"Initialized BlockTemplate with API URL: {self.api_url}")
 
-    def fetch_template(self):
-        payload = json.dumps({
-            "jsonrpc": "1.0",
-            "id": "curltest",
-            "method": "getblocktemplate",
-            "params": [{"rules": ["segwit"]}]
-        })
-        headers = {
-            'content-type': "application/json",
-            'cache-control': "no-cache",
-        }
+    def fetch_template(self, retries=5, backoff_factor=0.5):
+        for attempt in range(retries):
+            try:
+                response = requests.get(f"{self.api_url}/getblocktemplate")
+                response.raise_for_status()  # Raise HTTPError for bad responses
+                self.template = response.json()
+                return self.template
+            except requests.exceptions.RequestException as e:
+                print(f"Error fetching block template (attempt {attempt + 1}/{retries}): {e}")
+                time.sleep(backoff_factor * (2 ** attempt))  # Exponential backoff
 
-        try:
-            response = requests.post(self.rpc_url, data=payload, headers=headers,
-                                     auth=(self.rpc_user, self.rpc_password))
-            response.raise_for_status()  # Raise HTTPError for bad responses
-            self.template = response.json().get('result')
-            return self.template
-        except requests.exceptions.RequestException as e:
-            print(f"Error fetching block template: {e}")
-            self.template = None
-            return None
+        self.template = None
+        return None
 
     def get_template(self):
         return self.template
 
-
     def submit_block(self, block):
-        payload = json.dumps({
-            "jsonrpc": "1.0",
-            "id": "curltest",
-            "method": "submitblock",
-            "params": [block]
-        })
-        headers = {
-            'content-type': "application/json",
-            'cache-control': "no-cache",
-        }
-
+        payload = {'block': block}
         try:
-            response = requests.post(self.rpc_url, data=payload, headers=headers,
-                                     auth=(self.rpc_user, self.rpc_password))
+            response = requests.post(f"{self.api_url}/submitblock", json=payload)
             response.raise_for_status()  # Raise HTTPError for bad responses
             self.submission_response = response.json()
             return self.submission_response

@@ -326,13 +326,5 @@ def sha256_opencl(data_list, num_zeros):
 
 def sha256_pyopencl(data_array, num_zeros):
     data_list = [bytes.fromhex(row) for row in data_array]
-
-    # start_time = time.time()
     results = sha256_opencl(data_list, num_zeros)
-    # end_time = time.time()
-
-    # Mostrar algunos resultados y estadísticas
-    # for result in results[:10]:  # Mostrar solo los primeros 10 para ahorrar espacio
-    #     print(f"Data: {result['data']} -> Hash: {result['hash']}")
-    # print(f"El programa tomó {end_time - start_time} segundos en ejecutarse")
     return results

@@ -270,7 +270,7 @@ def sha256_cuda(data_list, num_zeros):
     filtered_data_gpu.free()
     output_count_gpu.free()
 
-    print(f"{num_valid_hashes} hashes cumplen con la condición.")
+    # print(f"{num_valid_hashes} hashes cumplen con la condición.")
     results = [
         {
             "data": ''.join(format(byte, '02x') for byte in data_row),
@@ -282,53 +282,7 @@ def sha256_cuda(data_list, num_zeros):
 
 
 # Función principal para probar la función de hash CUDA
-import time
-import hashlib
-
-
-def main():
-    num_data = 1
-
-    data_array = np.random.randint(0, 256, size=(num_data, 80), dtype=np.uint8)
-
-    header = "02000000a851f4ed17570a5c93e545fba4648717db1a46442afc6a415f010000000000001e960eeaca81ed7c223480d65c21c585634e548bfd6a8399fab35dce6258133b110a8f513daa011a5abc078a"
-    header_bytes = bytes.fromhex(header)
-    if len(header_bytes) != 80:
-        raise ValueError("La cadena debe tener 80 bytes")
-
-    header_num = np.frombuffer(header_bytes, dtype=np.uint8)
-    data_array = np.vstack([data_array, header_num])
-    data_list = [row.tobytes() for row in data_array]
-
-    start_time = time.time()
-    results = sha256_cuda(data_list, 15)  # Suponiendo que queremos hashes que terminen con 3 ceros
-    end_time = time.time()
-
-    for result in results[:10]:  # Mostrar solo los primeros 10 para ahorrar espacio
-        print(f"Data: {result['data']} -> \nHash: {result['hash']}")
-
-    print(f"El programa tomó {end_time - start_time} segundos en ejecutarse para {num_data} elementos.")
-    print(hashlib.sha256(bytes.fromhex(header)).digest().hex())
-    print(hashlib.sha256(hashlib.sha256(bytes.fromhex(header)).digest()).digest()[::-1].hex())
-
-
-if __name__ == "__main__":
-    main()
-
-
-
-# Función principal para probar la función de hash CUDA
 def sha256_pycuda(data_array, num_zeros):
-
-    data_list = [row.tobytes() for row in data_array]
-
-    # start_time = time.time()
+    data_list = [bytes.fromhex(row) for row in data_array]
     results = sha256_cuda(data_list, num_zeros)
-    # end_time = time.time()
-
-    # Mostrar algunos resultados y estadísticas
-    # for result in results[:10]:  # Mostrar solo los primeros 10 para ahorrar espacio
-    #     print(f"Data: {result['data']} -> Hash: {result['hash']}")
-
-    # print(f"El programa tomó {end_time - start_time} segundos en ejecutarse para {num_data} elementos.")
     return results
