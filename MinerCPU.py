@@ -39,7 +39,6 @@ class MinerCPU:
         time.sleep(wait)
         while True:
             self.count_valid_merkle_roots(wait, job_queue, generated_merkle_roots, merkle_roots)
-
             time.sleep(wait)
 
     def load_merkle_counts(self, file_path):
@@ -68,11 +67,7 @@ class MinerCPU:
     def job_generator(self, job_queue, generated_merkle_roots, merkle_roots):
         while True:
             try:
-                jobs, gen_mr, mr = self.stratum_processing.generate_jobs()
-                if jobs:
-                    job_queue.extend(jobs)
-                    generated_merkle_roots.extend(gen_mr)
-                    merkle_roots.extend(mr)
+                self.stratum_processing.generate_jobs(job_queue, generated_merkle_roots, merkle_roots)
             except Exception as e:
                 logging.error(f"Error en job_generator: {e}")
                 time.sleep(1)
@@ -174,6 +169,41 @@ class StratumProcessing:
                         except requests.exceptions.RequestException as e:
                             print(f"Error al enviar el bloque: {e}")
 
+    def process_job_cpu(self, job):
+        ntime = job['ntime']
+        nbits = job['nbits']
+        prevhash = job['prevhash']
+        version = job['version']
+        coinbase1 = job['coinbase1']
+        coinbase2 = job['coinbase2']
+        merkle_branch = job['merkle_branch']
+        merkle_root = job['merkle_root']
+
+        # self.proxy.merkle_roots.append(merkle_root)
+        nonce_df = self.check_merkle_nonce(merkle_root)
+        if nonce_df is not None:
+            self.proxy.merkle_roots_done.append(merkle_root)
+            for nonce_one in nonce_df:
+                nonce_init = int(nonce_one.ljust(8, '0'), 16)
+                len_nonce = 8 - len(nonce_df)
+                nonce_end = nonce_init + (16 ** len_nonce)
+
+                for nonce in range(nonce_init, nonce_end):
+                    nonce_hex = f"{nonce:08x}"
+                    block_header = version + prevhash + merkle_root + ntime + nbits + nonce_hex
+                    block_hash = hashlib.sha256(
+                        hashlib.sha256(bytes.fromhex(block_header)).digest()
+                    ).digest().hex()
+                    target = int(self.bits_to_target(job['nbits']), 16)
+                    target = '{:064x}'.format(target)
+                    if int(block_hash, 16) < int(target, 16):
+                        print(f"blockhash: {block_hash}")
+                        try:
+                            response = self.block_template_fetcher.submit_block(block_header)
+                            print(f"Respuesta del servidor RPC: {response}")
+                        except requests.exceptions.RequestException as e:
+                            print(f"Error al enviar el bloque: {e}")
+
     def check_merkle_nonce(self, merkle_root):
         matches = self.proxy.merkle_counts[
             self.proxy.merkle_counts['merkle_root'].apply(lambda x: merkle_root.startswith(x))]
@@ -183,14 +213,13 @@ class StratumProcessing:
             return nonces
         return []
 
-    def generate_jobs(self):
+    def generate_jobs(self, job_queue, generated_merkle_roots, merkle_roots):
         self.update_block_template()
         prevhash = self.to_little_endian(swap_endianness_8chars_final(self.block_template['previousblockhash']))
         version = self.version_to_hex(self.block_template['version'])
         nbits = self.block_template['bits']
         ntime = self.to_little_endian(self.int2lehex(int(time.time()), 4))
-        jobs, gen_mr, mr = self.create_job_from_blocktemplate(version, prevhash, nbits, ntime)
-        return jobs, gen_mr, mr
+        self.worker_job(version, prevhash, nbits, ntime, job_queue, generated_merkle_roots, merkle_roots)
 
     def update_block_template(self):
         template = self.block_template_fetcher.get_template()
@@ -202,17 +231,15 @@ class StratumProcessing:
             self.proxy.merkle_roots_done[:] = []
         self.height = self.block_template['height']
 
-    def worker_job(self, version, prev_block, nbits, ntime):
-        jobs = []
-        gen_mr = []
-        mr = []
-        for i in range(100000):
+    def worker_job(self, version, prev_block, nbits, ntime, job_queue, generated_merkle_roots, merkle_roots):
+        extranonce_placeholder = "00000000"
+        miner_message = self.miner_message()
+        coinbase1, coinbase2 = self.tx_make_coinbase_stratum(miner_message, extranonce_placeholder)
+        coinbase_tx = coinbase1 + extranonce_placeholder + coinbase2
+        coinbase_tx_hash = hashlib.sha256(hashlib.sha256(bytes.fromhex(coinbase_tx)).digest()).digest().hex()
+
+        while True:
             self.transactions = self.select_random_transactions()
-            extranonce_placeholder = "00000000"
-            miner_message = self.miner_message()
-            coinbase1, coinbase2 = self.tx_make_coinbase_stratum(miner_message, extranonce_placeholder)
-            coinbase_tx = coinbase1 + extranonce_placeholder + coinbase2
-            coinbase_tx_hash = hashlib.sha256(hashlib.sha256(bytes.fromhex(coinbase_tx)).digest()).digest().hex()
 
             merkle_hashes = [coinbase_tx_hash]
             for tx in self.transactions:
@@ -222,9 +249,11 @@ class StratumProcessing:
                     raise ValueError("Cada transacción debe contener 'hash' y 'data'")
             merkle_branch = self.compute_merkle_branch(merkle_hashes)
             merkle_root_candidate = self.compute_merkle_root(merkle_hashes)
-            gen_mr.append(merkle_root_candidate)
+
+            generated_merkle_roots.append(merkle_root_candidate)
             if self.check_merkle_root(merkle_root_candidate):
-                mr.append(merkle_root_candidate)
+
+                merkle_roots.append(merkle_root_candidate)
 
                 job = {
                     'version': self.to_little_endian(version),
@@ -237,31 +266,23 @@ class StratumProcessing:
                     'ntime': ntime,
                     'height': self.height,
                 }
-                jobs.append(job)
-        return jobs, gen_mr, mr
-
-    def create_job_from_blocktemplate(self, version, prevhash, nbits, ntime):
-        valid_jobs = []
-        generated_merkles = []
-        merkles = []
-        jobs, gen_mr, mr = self.worker_job(version, prevhash, nbits, ntime)
-        if jobs is not None:
-            valid_jobs.extend(jobs)
-        generated_merkles.extend(gen_mr)
-        merkles.extend(mr)
-        return valid_jobs, generated_merkles, merkles
+                job_queue.append(job)
 
     def compute_merkle_branch(self, merkle):
         branches = []
         while len(merkle) > 1:
             if len(merkle) % 2 != 0:
                 merkle.append(merkle[-1])
-            new_merkle = []
-            for i in range(0, len(merkle), 2):
-                branches.append(merkle[i])
-                new_merkle.append(
-                    hashlib.sha256(hashlib.sha256(bytes.fromhex(merkle[i] + merkle[i + 1])).digest()).hexdigest())
+
+            # Utilizar list comprehension para simplificar la creación de new_merkle
+            new_merkle = [
+                hashlib.sha256(hashlib.sha256(bytes.fromhex(merkle[i] + merkle[i + 1])).digest()).hexdigest()
+                for i in range(0, len(merkle), 2)
+            ]
+
+            branches.extend(merkle[i] for i in range(0, len(merkle), 2))
             merkle = new_merkle
+
         return branches
 
     def compute_merkle_root(self, merkle):
@@ -312,7 +333,8 @@ class StratumProcessing:
                 + coinbase_script
                 + extranonce_placeholder
         )
-        self.fee = self.calculate_coinbase_value()
+        # self.fee = self.calculate_coinbase_value()
+        self.fee = self.block_template['coinbasevalue']
         coinbase2 = (
                 "ffffffff"
                 + "01"
@@ -338,7 +360,7 @@ class StratumProcessing:
 
     def select_random_transactions(self):
         transactions = self.block_template["transactions"]
-        min_transactions, max_transactions = 4, 13
+        min_transactions, max_transactions = 4, 10 #min(2000, len(transactions))
         num_transactions = random.randint(min_transactions, max_transactions)
         selected_transactions = random.sample(transactions, num_transactions)
         return selected_transactions
