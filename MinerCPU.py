@@ -2,6 +2,7 @@ import configparser
 import hashlib
 import logging
 import multiprocessing
+import os
 import random
 import signal
 import struct
@@ -102,7 +103,8 @@ class MinerCPU:
 
         time.sleep(3)
 
-        num_generators = 2
+        num_cpu_cores = os.cpu_count()
+        num_generators = max(1, int(num_cpu_cores * 0.75))
         generator_processes = [
             multiprocessing.Process(target=self.job_generator,
                                     args=(self.job_queue, self.generated_merkle_roots, self.merkle_roots))

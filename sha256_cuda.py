@@ -211,34 +211,15 @@ extern "C" __global__ void filter_hashes(const uint8_t* hashes, const uint8_t* d
 
 """
 
-# Función para verificar si un dispositivo CUDA está libre
-def is_device_free(device_id):
-    try:
-        # Intentar crear un contexto en el dispositivo
-        context = cuda.Device(device_id).make_context()
-        context.detach()
-        return True
-    except:
-        return False
-
-# Seleccionar un dispositivo CUDA libre
-selected_device = None
-num_devices = cuda.Device.count()
-
-for device_id in range(num_devices):
-    if is_device_free(device_id):
-        selected_device = cuda.Device(device_id)
-        break
-
-if selected_device is None:
-    raise RuntimeError("No hay dispositivos CUDA disponibles o libres.")
 
 # Compilar el kernel CUDA
 mod = compiler.SourceModule(kernel_code)
 
 # Función principal para ejecutar los kernels
-def sha256_cuda(data_list, num_zeros):
-    context = cuda.Device(selected_device).make_context()
+def sha256_cuda(data_list, gpu_id, num_zeros):
+    cuda.init()
+    device = cuda.Device(gpu_id)
+    context = device.make_context()
     try:
         concatenated_data = b''.join(data_list)
         data_lengths = np.array([len(data) for data in data_list], dtype=np.uint64)
@@ -307,7 +288,7 @@ def sha256_cuda(data_list, num_zeros):
         context.detach()
 
 # Función principal para probar la función de hash CUDA
-def sha256_pycuda(data_array, num_zeros):
+def sha256_pycuda(data_array, gpu_id, num_zeros):
     data_list = [bytes.fromhex(row) for row in data_array]
-    results = sha256_cuda(data_list, num_zeros)
+    results = sha256_cuda(data_list, gpu_id, num_zeros)
     return results
