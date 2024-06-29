@@ -211,75 +211,100 @@ extern "C" __global__ void filter_hashes(const uint8_t* hashes, const uint8_t* d
 
 """
 
+# Función para verificar si un dispositivo CUDA está libre
+def is_device_free(device_id):
+    try:
+        # Intentar crear un contexto en el dispositivo
+        context = cuda.Device(device_id).make_context()
+        context.detach()
+        return True
+    except:
+        return False
+
+# Seleccionar un dispositivo CUDA libre
+selected_device = None
+num_devices = cuda.Device.count()
+
+for device_id in range(num_devices):
+    if is_device_free(device_id):
+        selected_device = cuda.Device(device_id)
+        break
+
+if selected_device is None:
+    raise RuntimeError("No hay dispositivos CUDA disponibles o libres.")
+
 # Compilar el kernel CUDA
 mod = compiler.SourceModule(kernel_code)
 
-
 # Función principal para ejecutar los kernels
 def sha256_cuda(data_list, num_zeros):
-    concatenated_data = b''.join(data_list)
-    data_lengths = np.array([len(data) for data in data_list], dtype=np.uint64)
-    offsets = np.cumsum([0] + list(data_lengths[:-1])).astype(np.uint64)
+    context = cuda.Device(selected_device).make_context()
+    try:
+        concatenated_data = b''.join(data_list)
+        data_lengths = np.array([len(data) for data in data_list], dtype=np.uint64)
+        offsets = np.cumsum([0] + list(data_lengths[:-1])).astype(np.uint64)
 
-    data_gpu = cuda.mem_alloc(len(concatenated_data))
-    data_lengths_gpu = cuda.mem_alloc(data_lengths.nbytes)
-    offsets_gpu = cuda.mem_alloc(offsets.nbytes)
-    result_gpu = cuda.mem_alloc(32 * len(data_list))
+        data_gpu = cuda.mem_alloc(len(concatenated_data))
+        data_lengths_gpu = cuda.mem_alloc(data_lengths.nbytes)
+        offsets_gpu = cuda.mem_alloc(offsets.nbytes)
+        result_gpu = cuda.mem_alloc(32 * len(data_list))
 
-    MAX_HASHES = 10
-    filtered_hashes_gpu = cuda.mem_alloc(32 * MAX_HASHES)
-    filtered_data_gpu = cuda.mem_alloc(80 * MAX_HASHES)
-    output_count_gpu = cuda.mem_alloc(np.int32().nbytes)
+        MAX_HASHES = 10
+        filtered_hashes_gpu = cuda.mem_alloc(32 * MAX_HASHES)
+        filtered_data_gpu = cuda.mem_alloc(80 * MAX_HASHES)
+        output_count_gpu = cuda.mem_alloc(np.int32().nbytes)
 
-    cuda.memcpy_htod(data_gpu, concatenated_data)
-    cuda.memcpy_htod(data_lengths_gpu, data_lengths)
-    cuda.memcpy_htod(offsets_gpu, offsets)
-    cuda.memcpy_htod(output_count_gpu, np.array([0], dtype=np.int32))
+        cuda.memcpy_htod(data_gpu, concatenated_data)
+        cuda.memcpy_htod(data_lengths_gpu, data_lengths)
+        cuda.memcpy_htod(offsets_gpu, offsets)
+        cuda.memcpy_htod(output_count_gpu, np.array([0], dtype=np.int32))
 
-    BLOCK_SIZE = 256
-    num_elements = len(data_list)
-    grid = ((num_elements + BLOCK_SIZE - 1) // BLOCK_SIZE, 1, 1)
+        BLOCK_SIZE = 256
+        num_elements = len(data_list)
+        grid = ((num_elements + BLOCK_SIZE - 1) // BLOCK_SIZE, 1, 1)
 
-    sha256_double_hash = mod.get_function("sha256_double_hash")
-    filter_hashes = mod.get_function("filter_hashes")
+        sha256_double_hash = mod.get_function("sha256_double_hash")
+        filter_hashes = mod.get_function("filter_hashes")
 
-    sha256_double_hash(data_gpu, result_gpu, data_lengths_gpu, offsets_gpu, np.uint64(num_elements),
-                       block=(BLOCK_SIZE, 1, 1), grid=grid)
-    cuda.Context.synchronize()
+        sha256_double_hash(data_gpu, result_gpu, data_lengths_gpu, offsets_gpu, np.uint64(num_elements),
+                           block=(BLOCK_SIZE, 1, 1), grid=grid)
+        cuda.Context.synchronize()
 
-    num_zeros_np = np.int32(num_zeros)
-    filter_hashes(result_gpu, data_gpu, filtered_hashes_gpu, filtered_data_gpu, output_count_gpu,
-                  np.uint64(num_elements), num_zeros_np, block=(BLOCK_SIZE, 1, 1), grid=grid)
-    cuda.Context.synchronize()
+        num_zeros_np = np.int32(num_zeros)
+        filter_hashes(result_gpu, data_gpu, filtered_hashes_gpu, filtered_data_gpu, output_count_gpu,
+                      np.uint64(num_elements), num_zeros_np, block=(BLOCK_SIZE, 1, 1), grid=grid)
+        cuda.Context.synchronize()
 
-    output_count = np.empty(1, dtype=np.int32)
-    cuda.memcpy_dtoh(output_count, output_count_gpu)
-    num_valid_hashes = min(output_count[0], MAX_HASHES)
-    filtered_hashes = np.empty((num_valid_hashes, 32), dtype=np.uint8)
-    filtered_data = np.empty((num_valid_hashes, 80), dtype=np.uint8)
+        output_count = np.empty(1, dtype=np.int32)
+        cuda.memcpy_dtoh(output_count, output_count_gpu)
+        num_valid_hashes = min(output_count[0], MAX_HASHES)
+        filtered_hashes = np.empty((num_valid_hashes, 32), dtype=np.uint8)
+        filtered_data = np.empty((num_valid_hashes, 80), dtype=np.uint8)
 
-    if num_valid_hashes > 0:
-        cuda.memcpy_dtoh(filtered_hashes, filtered_hashes_gpu)
-        cuda.memcpy_dtoh(filtered_data, filtered_data_gpu)
+        if num_valid_hashes > 0:
+            cuda.memcpy_dtoh(filtered_hashes, filtered_hashes_gpu)
+            cuda.memcpy_dtoh(filtered_data, filtered_data_gpu)
 
-    data_gpu.free()
-    data_lengths_gpu.free()
-    offsets_gpu.free()
-    result_gpu.free()
-    filtered_hashes_gpu.free()
-    filtered_data_gpu.free()
-    output_count_gpu.free()
+        data_gpu.free()
+        data_lengths_gpu.free()
+        offsets_gpu.free()
+        result_gpu.free()
+        filtered_hashes_gpu.free()
+        filtered_data_gpu.free()
+        output_count_gpu.free()
 
-    # print(f"{num_valid_hashes} hashes cumplen con la condición.")
-    results = [
-        {
-            "data": ''.join(format(byte, '02x') for byte in data_row),
-            "hash": ''.join(format(byte, '02x') for byte in hash_row)
-        }
-        for data_row, hash_row in zip(filtered_data, filtered_hashes)
-    ]
-    return results
-
+        # print(f"{num_valid_hashes} hashes cumplen con la condición.")
+        results = [
+            {
+                "data": ''.join(format(byte, '02x') for byte in data_row),
+                "hash": ''.join(format(byte, '02x') for byte in hash_row)
+            }
+            for data_row, hash_row in zip(filtered_data, filtered_hashes)
+        ]
+        return results
+    finally:
+        context.pop()
+        context.detach()
 
 # Función principal para probar la función de hash CUDA
 def sha256_pycuda(data_array, num_zeros):

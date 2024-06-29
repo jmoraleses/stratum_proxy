@@ -263,15 +263,19 @@ __kernel void filter_hashes(__global const uchar* hashes, __global const uchar* 
 
 """
 
-# Inicialización de OpenCL
-platform = cl.get_platforms()[0]
-device = platform.get_devices()[0]
-context = cl.Context([device])
-queue = cl.CommandQueue(context)
-program = cl.Program(context, kernel_code).build()
 
 # Función principal para ejecutar los kernels
-def sha256_opencl(data_list, num_zeros):
+def sha256_opencl(data_list, gpu_id, num_zeros):
+    platforms = cl.get_platforms()
+    gpu_devices = [device for platform in platforms for device in platform.get_devices(device_type=cl.device_type.GPU)]
+
+    if gpu_id >= len(gpu_devices):
+        raise ValueError("Invalid GPU ID")
+
+    context = cl.Context(devices=[gpu_devices[gpu_id]])
+    queue = cl.CommandQueue(context)
+    program = cl.Program(context, kernel_code).build()
+
     concatenated_data = b''.join(data_list)
     data_lengths = np.array([len(data) for data in data_list], dtype=np.uint64)
     offsets = np.cumsum([0] + list(data_lengths[:-1])).astype(np.uint64)
@@ -324,7 +328,7 @@ def sha256_opencl(data_list, num_zeros):
     return results
 
 
-def sha256_pyopencl(data_array, num_zeros):
+def sha256_pyopencl(data_array, gpu_id, num_zeros):
     data_list = [bytes.fromhex(row) for row in data_array]
-    results = sha256_opencl(data_list, num_zeros)
+    results = sha256_opencl(data_list, gpu_id, num_zeros)
     return results

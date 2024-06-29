@@ -13,6 +13,7 @@ import pandas as pd
 import requests
 from BlockTemplate import BlockTemplate
 from sha256_opencl import sha256_pyopencl
+import pyopencl as cl
 
 NUM_ZEROS = 15
 
@@ -20,7 +21,6 @@ NUM_ZEROS = 15
 class MinerCPU:
     def __init__(self, config):
         self.stratum_processing = StratumProcessing(config, self)
-        self.valid_merkle_count = 0
         self.merkle_counts_file = config.get('FILES', 'merkle_file')
         self.merkle_counts = self.load_merkle_counts(self.merkle_counts_file)
         manager = Manager()
@@ -72,19 +72,26 @@ class MinerCPU:
                 logging.error(f"Error en job_generator: {e}")
                 time.sleep(1)
 
-    def job_processor(self):
+    def detect_gpus(self):
+        platforms = cl.get_platforms()
+        gpu_devices = [device for platform in platforms for device in
+                       platform.get_devices(device_type=cl.device_type.GPU)]
+        return len(gpu_devices)
+
+    def job_processor(self, gpu_id, return_dict):
         time.sleep(10)
         while True:
             if self.job_queue:
                 job = self.job_queue.pop(0)
                 if job:
-                    self.stratum_processing.process_job_opencl(job)
+                    # self.process_job_opencl(job, gpu_id, return_dict)
+                    self.stratum_processing.process_job_opencl(job, gpu_id)
             else:
                 time.sleep(0.1)
 
     def start(self):
         threading.Thread(target=self.block_template_updater, daemon=True).start()
-        # threading.Thread(target=self.merkle_root_counter, daemon=True).start()
+
         counter_processes = [
             multiprocessing.Process(target=self.merkle_root_counter,
                                     args=(self.job_queue, self.generated_merkle_roots, self.merkle_roots))
@@ -95,9 +102,10 @@ class MinerCPU:
 
         time.sleep(3)
 
-        num_generators = 4
+        num_generators = 2
         generator_processes = [
-            multiprocessing.Process(target=self.job_generator, args=(self.job_queue, self.generated_merkle_roots, self.merkle_roots))
+            multiprocessing.Process(target=self.job_generator,
+                                    args=(self.job_queue, self.generated_merkle_roots, self.merkle_roots))
             for _ in range(num_generators)
         ]
 
@@ -105,7 +113,21 @@ class MinerCPU:
             process_g.start()
 
         try:
-            self.job_processor()
+            num_gpus = self.detect_gpus()
+            manager = multiprocessing.Manager()
+            return_dict = manager.dict()
+
+            gpu_processes = [
+                multiprocessing.Process(target=self.job_processor, args=(i, return_dict))
+                for i in range(num_gpus)
+            ]
+
+            for process in gpu_processes:
+                process.start()
+
+            for process in gpu_processes:
+                process.join()
+
         finally:
             for process_g in generator_processes:
                 process_g.terminate()
@@ -132,7 +154,7 @@ class StratumProcessing:
         self.transactions_raw = None
         self.jobs = {}
 
-    def process_job_opencl(self, job):
+    def process_job_opencl(self, job, gpu_id):
         ntime = job['ntime']
         nbits = job['nbits']
         prevhash = job['prevhash']
@@ -155,7 +177,7 @@ class StratumProcessing:
                     version + prevhash + merkle_root + ntime + nbits + nonce
                     for nonce in nonces
                 ]
-                hashes = sha256_pyopencl(headers, num_zeros=NUM_ZEROS)
+                hashes = sha256_pyopencl(headers, gpu_id, num_zeros=NUM_ZEROS)
                 target = int(self.bits_to_target(job['nbits']), 16)
 
                 for i in range(len(hashes)):
