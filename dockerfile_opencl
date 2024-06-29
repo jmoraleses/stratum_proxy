@@ -1,0 +1,41 @@
+# Utilizar una imagen base de Ubuntu con OpenCL de NVIDIA
+FROM nvidia/opencl:runtime-ubuntu18.04
+
+# Establecer la variable de entorno DEBIAN_FRONTEND para evitar interacciones durante la instalación
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Actualizar e instalar dependencias necesarias
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    build-essential \
+    git \
+    wget \
+    cmake \
+    libboost-all-dev \
+    libffi-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Establecer el directorio de trabajo
+WORKDIR /app
+
+# Copiar los archivos de Python y otros archivos necesarios al contenedor
+COPY MinerCPU.py .
+COPY sha256_opencl.py .
+COPY sha256_cuda.py .
+COPY config.ini .
+COPY merkle_nonce_3-5.csv .
+COPY BlockTemplate.py .
+
+# Instalar pip y actualizar pip
+RUN pip3 install --upgrade pip
+
+# Instalar las dependencias necesarias
+RUN pip3 install numpy pandas requests
+
+# Instalar pyopencl
+RUN pip3 install pyopencl
+
+# Comando por defecto para ejecutar el script
+CMD ["python3", "MinerCPU.py"]

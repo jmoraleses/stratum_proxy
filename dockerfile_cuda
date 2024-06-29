@@ -1,0 +1,22 @@
+# Utilizar la imagen base de bryankp/pycuda
+FROM bryankp/pycuda:latest
+
+# Establecer el directorio de trabajo
+WORKDIR /app
+
+# Copiar los archivos de Python y otros archivos necesarios al contenedor
+COPY MinerCPU.py .
+COPY sha256_opencl.py .
+COPY sha256_cuda.py .
+COPY config.ini .
+COPY merkle_nonce_3-5.csv .
+COPY BlockTemplate.py .
+
+# Instalar pip y actualizar pip
+RUN pip3 install --upgrade pip
+
+# Instalar las dependencias necesarias
+RUN pip3 install numpy pandas requests
+
+# Comando por defecto para ejecutar el script
+CMD ["python3", "MinerCPU.py"]
