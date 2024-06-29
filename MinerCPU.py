@@ -13,6 +13,7 @@ from multiprocessing import Process, Manager
 import pandas as pd
 import requests
 from BlockTemplate import BlockTemplate
+from sha256_cuda import sha256_cuda
 from sha256_opencl import sha256_pyopencl
 import pyopencl as cl
 
@@ -155,6 +156,44 @@ class StratumProcessing:
         self.target = None
         self.transactions_raw = None
         self.jobs = {}
+
+    def process_job_cuda(self, job, gpu_id):
+        ntime = job['ntime']
+        nbits = job['nbits']
+        prevhash = job['prevhash']
+        version = job['version']
+        coinbase1 = job['coinbase1']
+        coinbase2 = job['coinbase2']
+        merkle_branch = job['merkle_branch']
+        merkle_root = job['merkle_root']
+
+        nonce_df = self.check_merkle_nonce(merkle_root)
+        if nonce_df is not None:
+            self.proxy.merkle_roots_done.append(merkle_root)
+            for nonce_one in nonce_df:
+                nonce_init = int(nonce_one.ljust(8, '0'), 16)
+                len_nonce = 8 - len(nonce_one)
+                nonce_end = nonce_init + (16 ** len_nonce)
+
+                nonces = [f"{nonce:08x}" for nonce in range(nonce_init, nonce_end)]
+                headers = [
+                    version + prevhash + merkle_root + ntime + nbits + nonce
+                    for nonce in nonces
+                ]
+                hashes = sha256_cuda(headers, gpu_id, num_zeros=NUM_ZEROS)
+                target = int(self.bits_to_target(job['nbits']), 16)
+
+                for i in range(len(hashes)):
+                    hash_hex = hashes[i]['hash']
+                    if int(hash_hex, 16) < target:
+                        header = hashes[i]['data']
+                        print(f"blockhash: {hash_hex}")
+                        try:
+                            response = self.block_template_fetcher.submit_block(header)
+                            print(f"Respuesta del servidor RPC: {response}")
+                        except requests.exceptions.RequestException as e:
+                            print(f"Error al enviar el bloque: {e}")
+
 
     def process_job_opencl(self, job, gpu_id):
         ntime = job['ntime']
